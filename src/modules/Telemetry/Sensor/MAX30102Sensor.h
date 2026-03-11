@@ -1,6 +1,6 @@
 #include "configuration.h"
 
-#if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR && !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY && __has_include(<MAX30105.h>)
+#if !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY && __has_include(<MAX30105.h>)
 
 #include "../mesh/generated/meshtastic/telemetry.pb.h"
 #include "TelemetrySensor.h"
@@ -66,8 +66,8 @@ class MAX30102Sensor : public TelemetrySensor
     static constexpr uint32_t MAX3010X_PRESENCE_RED_DC_MIN = 40;  // Low-power presence mode threshold
     static constexpr uint32_t MAX3010X_PRESENCE_IR_PEAK_MIN = 140;  // Instantaneous peak threshold in low-power mode
     static constexpr uint32_t MAX3010X_PRESENCE_RED_PEAK_MIN = 70;  // Instantaneous peak threshold in low-power mode
-    static constexpr uint32_t MAX3010X_PRESENCE_IR_DC_MIN_IR_ONLY = 320;   // IR-only presence threshold (LED=0x02)
-    static constexpr uint32_t MAX3010X_PRESENCE_IR_PEAK_MIN_IR_ONLY = 450; // IR-only peak threshold (LED=0x02)
+    static constexpr uint32_t MAX3010X_PRESENCE_IR_DC_MIN_IR_ONLY = 3200;   // IR-only presence threshold (LED=0x02)
+    static constexpr uint32_t MAX3010X_PRESENCE_IR_PEAK_MIN_IR_ONLY = 4500; // IR-only peak threshold (LED=0x02)
     static constexpr uint8_t MAX3010X_PRESENCE_MIN_SAMPLES = 6;
     static constexpr uint8_t MAX3010X_PRESENCE_CONSECUTIVE_REQUIRED = 2;
     static constexpr uint32_t MAX3010X_POWERDOWN_RED_MEAN_MAX = 60000;
@@ -77,12 +77,15 @@ class MAX30102Sensor : public TelemetrySensor
     static constexpr uint32_t HEART_RATE_MAX_VALID = 220;
     static constexpr uint32_t SPO2_MIN_VALID = 70;
     static constexpr uint32_t SPO2_MAX_VALID = 100;
+    /** Algorithm sentinel for "invalid" SpO2 (e.g. Maxim returns -999); never treat as valid. */
+    static constexpr int32_t SPO2_INVALID_SENTINEL = -999;
     static constexpr uint32_t MAX3010X_EVAL_MIN_INTERVAL_MS = 500; // Limit HR/SpO2 algorithm cadence to ~2Hz
     static constexpr uint32_t STABLE_VALUE_HOLD_MS = 5000; // Keep last stable value briefly during transient instability
     static constexpr float HEART_EMA_ALPHA = 0.2f;         // BPM_filtered = 0.8*prev + 0.2*new
     static constexpr float HEART_OUTPUT_EMA_ALPHA = 0.35f; // Additional smoothing for displayed/latched HR
     static constexpr uint8_t MAX30102_LED_POWER_PRESENCE = 0x02;
-    static constexpr uint8_t MAX30102_LED_POWER_ACTIVE_DEFAULT = 0x1F;
+    /** Default active LED power; higher (e.g. 0x2F) improves SpO2 algorithm success vs 0x1F. */
+    static constexpr uint8_t MAX30102_LED_POWER_ACTIVE_DEFAULT = 0x2F;
     static constexpr uint8_t MAX30102_LED_POWER_ACTIVE_MAX = 0x4F;
     static constexpr uint8_t MAX30102_LED_POWER_STEP = 0x06;
     static constexpr uint8_t MAX30102_POOR_SIGNAL_STREAK_FOR_BOOST = 4;
@@ -195,6 +198,8 @@ class MAX30102Sensor : public TelemetrySensor
     void setStayAwake(bool stayAwake);
     bool serviceSensor();
     bool getRawWaveformSnapshot(uint32_t *irOut, uint32_t *redOut, uint16_t capacity, uint16_t *countOut);
+    /** True when finger is detected and sensor is in active HR mode (for UI auto-navigate). */
+    bool isHrEngaged() const;
 };
 
 #endif

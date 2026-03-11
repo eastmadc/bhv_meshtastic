@@ -54,11 +54,15 @@
 #if HAS_TELEMETRY
 #include "modules/Telemetry/DeviceTelemetry.h"
 #endif
-#if HAS_SENSOR && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+#if HAS_SENSOR && (!MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR || !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY)
 #include "main.h"
-#include "modules/Telemetry/EnvironmentTelemetry.h"
-#include "modules/Telemetry/HealthTelemetry.h"
 #include "modules/Telemetry/Sensor/TelemetrySensor.h"
+#endif
+#if HAS_SENSOR && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
+#include "modules/Telemetry/EnvironmentTelemetry.h"
+#endif
+#if HAS_SENSOR && !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY
+#include "modules/Telemetry/HealthTelemetry.h"
 #endif
 #if HAS_SENSOR && !MESHTASTIC_EXCLUDE_AIR_QUALITY_SENSOR
 #include "main.h"
@@ -193,18 +197,18 @@ void setupModules()
         (moduleConfig.telemetry.environment_measurement_enabled || moduleConfig.telemetry.environment_screen_enabled)) {
         new EnvironmentTelemetryModule();
     }
+#endif
 #if HAS_TELEMETRY && HAS_SENSOR && !MESHTASTIC_EXCLUDE_AIR_QUALITY_SENSOR
     if (moduleConfig.has_telemetry &&
         (moduleConfig.telemetry.air_quality_enabled || moduleConfig.telemetry.air_quality_screen_enabled)) {
         new AirQualityTelemetryModule();
     }
 #endif
-#if !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY
+#if HAS_SENSOR && !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY
     if (nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_MAX30102].first > 0 ||
         nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_MLX90614].first > 0) {
-        new HealthTelemetryModule();
+        healthTelemetryModule = new HealthTelemetryModule();
     }
-#endif
 #endif
 #if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_POWER_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
     if (moduleConfig.has_telemetry &&

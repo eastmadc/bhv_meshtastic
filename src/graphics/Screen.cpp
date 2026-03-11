@@ -406,6 +406,22 @@ Screen::~Screen()
     delete[] graphics::normalFrames;
 }
 
+uint8_t Screen::getCurrentFrameIndex() const
+{
+    if (!useDisplay || !showingNormalScreen || !ui) {
+        return 0;
+    }
+    return (uint8_t)ui->getUiState()->currentFrame;
+}
+
+void Screen::switchToFrameByIndex(uint8_t index)
+{
+    ScreenCmd cmd;
+    cmd.cmd = Cmd::SWITCH_TO_FRAME_INDEX;
+    cmd.frame_index = index;
+    enqueueCmd(cmd);
+}
+
 /**
  * Prepare the display for the unit going to the lowest power mode possible.  Most screens will just
  * poweroff, but eink screens will show a "I'm sleeping" graphic, possibly with a QR code
@@ -895,6 +911,12 @@ int32_t Screen::runOnce()
                 setFrames();
             }
             break;
+        case Cmd::SWITCH_TO_FRAME_INDEX:
+            if (showingNormalScreen && cmd.frame_index < framesetInfo.frameCount) {
+                ui->switchToFrame(cmd.frame_index);
+                setFastFramerate();
+            }
+            break;
         case Cmd::NOOP:
             break;
         default:
@@ -1168,8 +1190,9 @@ void Screen::setFrames(FrameFocus focus)
                 fsi.positions.focusedModule = numframes;
             if (m && m == waypointModule)
                 fsi.positions.waypoint = numframes;
-
-            indicatorIcons.push_back(icon_module);
+            if (m && strcmp(m->getName(), "HealthTelemetry") == 0)
+                fsi.positions.health = numframes;
+            indicatorIcons.push_back((m && strcmp(m->getName(), "HealthTelemetry") == 0) ? icon_heart : icon_module);
             numframes++;
         }
     }

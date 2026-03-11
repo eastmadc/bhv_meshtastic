@@ -1,18 +1,21 @@
 #include "configuration.h"
 
-#if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR && !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY && !defined(ARCH_PORTDUINO)
+#if !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY && !defined(ARCH_PORTDUINO)
 
 #pragma once
 #include "../mesh/generated/meshtastic/telemetry.pb.h"
 #include "BaseTelemetryModule.h"
 #include "NodeDB.h"
 #include "ProtobufModule.h"
+#include "Observer.h"
+#include "mesh/MeshModule.h"
 #include <OLEDDisplay.h>
 #include <OLEDDisplayUi.h>
 
 class HealthTelemetryModule : private concurrency::OSThread,
                               public BaseTelemetryModule,
-                              public ProtobufModule<meshtastic_Telemetry>
+                              public ProtobufModule<meshtastic_Telemetry>,
+                              public Observable<const UIFrameEvent *>
 {
     CallbackObserver<HealthTelemetryModule, const meshtastic::Status *> nodeStatusObserver =
         CallbackObserver<HealthTelemetryModule, const meshtastic::Status *>(this, &HealthTelemetryModule::handleStatusUpdate);
@@ -34,6 +37,7 @@ class HealthTelemetryModule : private concurrency::OSThread,
 #endif
 
     virtual bool wantUIFrame() override;
+    virtual Observable<const UIFrameEvent *> *getUIFrameObservable() override { return this; }
 
   protected:
     /** Called to handle a particular incoming message
@@ -61,6 +65,13 @@ class HealthTelemetryModule : private concurrency::OSThread,
     uint32_t lastLocalMeasurementAttemptMs = 0;
     uint32_t lastSentToPhone = 0;
     uint32_t sensor_read_error_count = 0;
+
+    // HR sensor auto-navigate to health screen
+    bool lastHrEngaged = false;
+    bool hrAutoWokeScreen = false;
+    uint8_t previousFrameIndex = 0;
 };
+
+extern HealthTelemetryModule *healthTelemetryModule;
 
 #endif

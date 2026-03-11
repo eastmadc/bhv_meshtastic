@@ -1,6 +1,6 @@
 #include "configuration.h"
 
-#if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR && !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY && __has_include(<MAX30105.h>)
+#if !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY && __has_include(<MAX30105.h>)
 
 #include "../mesh/generated/meshtastic/telemetry.pb.h"
 #include "MAX30102Sensor.h"
@@ -752,6 +752,10 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
 
     cacheRawWaveform(irWindow, redWindow, MAX30102_BUFFER_LEN);
 
+    // Log input levels to algorithm so -999 / poor SpO2 can be correlated with weak signal
+    LOG_INFO("SpO2 input: mean_ir=%u mean_red=%u max_ir=%u max_red=%u (n=%u)", meanIr, meanRed, maxIr, maxRed,
+             (unsigned)MAX30102_BUFFER_LEN);
+
     int32_t spo2 = 0;
     int8_t spo2_valid = 0;
     int32_t selectedHeartRate = 0;
@@ -760,7 +764,8 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
                                            &selectedHeartRateValid);
     bool hrValueValid = ((selectedHeartRateValid != 0) && (selectedHeartRate >= (int32_t)HEART_RATE_MIN_VALID) &&
                          (selectedHeartRate <= (int32_t)HEART_RATE_MAX_VALID));
-    bool spo2ValueValid = (spo2_valid != 0) && (spo2 >= (int32_t)SPO2_MIN_VALID) && (spo2 <= (int32_t)SPO2_MAX_VALID);
+    bool spo2ValueValid = (spo2_valid != 0) && (spo2 != SPO2_INVALID_SENTINEL) &&
+                          (spo2 >= (int32_t)SPO2_MIN_VALID) && (spo2 <= (int32_t)SPO2_MAX_VALID);
 
     if (hrValueValid) {
         pushStabilitySample((uint32_t)selectedHeartRate, hrStabilityWindow, &hrStabilityCount, &hrStabilityIndex);
@@ -784,7 +789,8 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
 
     float tempC = 0.0f;
     bool tempValid = false;
-    if (stableHeart && stableSpO2) {
+    if (stableHeart) {
+        // Read temperature when HR is stable (no longer require stable SpO2 so temp can show sooner)
         if (chipType == PulseOxChipType::MAX30102) {
             tempC = max30102.readTemperature();
             tempValid = !isnan(tempC) && (tempC > -40.0f) && (tempC < 120.0f);
@@ -839,8 +845,13 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
         latchedHasSpO2 = true;
         latchedSpO2 = filteredSpO2;
         lastStableSpO2Ms = nowMsEval;
+    } else if (spo2ValueValid) {
+        // Latch valid-but-not-stable SpO2 so UI can show it (hold for STABLE_VALUE_HOLD_MS)
+        latchedHasSpO2 = true;
+        latchedSpO2 = (uint32_t)spo2;
+        lastStableSpO2Ms = nowMsEval;
     }
-    if (tempValid && stableHeart && stableSpO2) {
+    if (tempValid && stableHeart) {
         latchedHasTemperature = true;
         latchedTemperatureC = tempC;
         lastStableTempMs = nowMsEval;
@@ -860,8 +871,8 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
     outputHasSpO2 = stableSpO2 || spo2HoldValid;
     outputSpO2 = stableSpO2 ? filteredSpO2 : (spo2HoldValid ? latchedSpO2 : 0);
 
-    outputHasTemp = (tempValid && stableHeart && stableSpO2) || tempHoldValid;
-    outputTempC = (tempValid && stableHeart && stableSpO2) ? tempC : (tempHoldValid ? latchedTemperatureC : 0.0f);
+    outputHasTemp = (tempValid && stableHeart) || tempHoldValid;
+    outputTempC = (tempValid && stableHeart) ? tempC : (tempHoldValid ? latchedTemperatureC : 0.0f);
 
     cachedHasHeartRate = outputHasHeart;
     cachedHeartRate = outputHeart;
@@ -870,8 +881,11 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
     cachedHasTemperature = outputHasTemp;
     cachedTemperatureC = outputTempC;
 
+    const bool usedSpO2Hold = !stableSpO2 && spo2HoldValid;
     LOG_INFO("HR eval: hr=%d valid=%d stable=%d hr_window_count=%u step=%u hr_out=%u hold=%d", selectedHeartRate, hrValueValid,
              stableHeart, hrStabilityCount, MAX3010X_SLIDING_STEP, outputHeart, usedHeartHold);
+    LOG_INFO("SpO2 eval: spo2=%d valid=%d stable=%d spo2_window_count=%u spo2_out=%u hold=%d", (int)spo2, spo2ValueValid ? 1 : 0,
+             stableSpO2 ? 1 : 0, spo2StabilityCount, outputSpO2, usedSpO2Hold ? 1 : 0);
     return true;
 }
 
@@ -976,6 +990,17 @@ bool MAX30102Sensor::canSleep()
 bool MAX30102Sensor::isActive()
 {
     return sensorActive;
+}
+
+bool MAX30102Sensor::isHrEngaged() const
+{
+    if (chipType == PulseOxChipType::MAX30102) {
+        return max30102PresenceTriggeredActive;
+    }
+    if (chipType == PulseOxChipType::MAX30100) {
+        return sensorActive;
+    }
+    return false;
 }
 
 void MAX30102Sensor::sleep()

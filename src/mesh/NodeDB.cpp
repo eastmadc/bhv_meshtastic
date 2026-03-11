@@ -923,6 +923,9 @@ void NodeDB::installDefaultModuleConfig()
 
     initModuleConfigIntervals();
 
+    // Env telemetry screen hidden by default; user can enable via "Show Env. Telemetry" in menu.
+    moduleConfig.telemetry.environment_screen_enabled = false;
+
 #if defined(HELTEC_V4) || defined(HELTEC_V4_TFT)
     // Enable health telemetry by default for Heltec V4 builds so MAX30102
     // readings are visible on-device after a fresh config install.
@@ -1380,6 +1383,12 @@ void NodeDB::loadFromDisk()
             installDefaultModuleConfig();
         } else {
             LOG_INFO("Loaded saved moduleConfig version %d", moduleConfig.version);
+            // One-time migration: env telemetry screen is now hidden by default.
+            if (moduleConfig.version < 25 && moduleConfig.telemetry.environment_screen_enabled) {
+                moduleConfig.telemetry.environment_screen_enabled = false;
+                moduleConfig.version = 25;
+                saveToDisk(SEGMENT_MODULECONFIG);
+            }
         }
     }
 

@@ -253,6 +253,11 @@ class Screen : public concurrency::OSThread
 
     bool isScreenOn() { return screenOn; }
 
+    /** Current frame index when useDisplay and showingNormalScreen; otherwise 0. */
+    uint8_t getCurrentFrameIndex() const;
+    /** Enqueue switch to the given frame index (processed by Screen thread). */
+    void switchToFrameByIndex(uint8_t index);
+
     // Stores the last 4 of our hardware ID, to make finding the device for pairing easier
     // FIXME: Needs refactoring and getMacAddr needs to be moved to a utility class
     char ourId[5];
@@ -653,6 +658,7 @@ class Screen : public concurrency::OSThread
         union {
             uint32_t bluetooth_pin;
             char *print_text;
+            uint8_t frame_index;
         };
     };
 
@@ -681,6 +687,7 @@ class Screen : public concurrency::OSThread
         struct FramePositions {
             uint8_t fault = 255;
             uint8_t waypoint = 255;
+            uint8_t health = 255;
             uint8_t focusedModule = 255;
             uint8_t log = 255;
             uint8_t settings = 255;
@@ -726,7 +733,7 @@ class Screen : public concurrency::OSThread
 #ifdef USE_EINK
         bool nodelist_bearings = false;
 #endif
-        bool gps = false;
+        bool gps = true;
 #endif
         bool lora = false;
         bool show_favorites = false;

@@ -86,6 +86,7 @@ class MeshModule
     virtual bool isRequestingFocus();                          // Checked by screen, when regenerating frameset
     virtual bool interceptingKeyboardInput() { return false; } // Can screen use keyboard for nav, or is module handling input?
 #endif
+    const char *getName() const { return name; }
   protected:
     const char *name;
 

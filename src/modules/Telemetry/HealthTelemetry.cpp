@@ -1,6 +1,6 @@
 #include "configuration.h"
 
-#if !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR && !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY && !defined(ARCH_PORTDUINO)
+#if !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY && !defined(ARCH_PORTDUINO)
 
 #include "../mesh/generated/meshtastic/telemetry.pb.h"
 #include "Default.h"
@@ -20,6 +20,8 @@
 #include <OLEDDisplayUi.h>
 #if HAS_SCREEN
 #include "graphics/Screen.h"
+#include "graphics/ScreenFonts.h"
+#include "graphics/SharedUIDisplay.h"
 #endif
 
 // Sensors
@@ -28,6 +30,8 @@
 
 MAX30102Sensor max30102Sensor;
 MLX90614Sensor mlx90614Sensor;
+
+HealthTelemetryModule *healthTelemetryModule = nullptr;
 
 #define FAILED_STATE_SENSOR_READ_MULTIPLIER 10
 #define DISPLAY_RECEIVEID_MEASUREMENTS_ON_SCREEN true
@@ -176,6 +180,36 @@ int32_t HealthTelemetryModule::runOnce()
         }
     }
 
+#if HAS_SCREEN
+    // HR sensor auto-navigate: switch to health screen when finger detected, restore or sleep when removed.
+    if (healthScreenEnabled && max30102Sensor.hasSensor() && screen) {
+        const bool engaged = max30102Sensor.isHrEngaged();
+        if (!lastHrEngaged && engaged) {
+            const bool screenWasOn = screen->isScreenOn();
+            if (screenWasOn) {
+                previousFrameIndex = screen->getCurrentFrameIndex();
+            } else {
+                hrAutoWokeScreen = true;
+            }
+            screen->setOn(true);
+            requestFocus();
+            UIFrameEvent e;
+            e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
+            notifyObservers(&e);
+            lastHrEngaged = true;
+        } else if (lastHrEngaged && !engaged) {
+            if (hrAutoWokeScreen) {
+                screen->setOn(false);
+            } else {
+                screen->switchToFrameByIndex(previousFrameIndex);
+            }
+            lastHrEngaged = false;
+            hrAutoWokeScreen = false;
+            previousFrameIndex = 0;
+        }
+    }
+#endif
+
     // Keep mesh/phone telemetry transmissions behind measurement_enabled.
     if (measurementEnabled) {
         uint32_t lastTelemetry = transmitHistory ? transmitHistory->getLastSentToMeshMillis(TX_HISTORY_KEY_HEALTH_TELEMETRY) : 0;
@@ -207,48 +241,30 @@ bool HealthTelemetryModule::wantUIFrame()
 
 void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
+    // Header with battery, time, and title (same as clock)
+    graphics::drawCommonHeader(display, x, y, "Heart Rate", true, false);
+    const int headerHeight = FONT_HEIGHT_SMALL + 2;
+    int contentY = y + headerHeight;
+
     display->setTextAlignment(TEXT_ALIGN_LEFT);
     display->setFont(FONT_SMALL);
     const int16_t fontHeight = _fontHeight(FONT_SMALL);
 
     meshtastic_Telemetry lastMeasurement = meshtastic_Telemetry_init_zero;
-    bool usingLocalCache = false;
     bool hasMeasurement = false;
-    const char *lastSender = "Local";
 
-    // Prefer local sensor cache for OLED rendering whenever available.
-    // Fallback to last packet only if local cache is not ready yet.
+    // Health frame shows local sensor data only (no remote metrics).
     if (max30102Sensor.hasSensor()) {
         lastMeasurement.which_variant = meshtastic_Telemetry_health_metrics_tag;
         lastMeasurement.variant.health_metrics = meshtastic_HealthMetrics_init_zero;
         lastMeasurement.time = getTime();
         hasMeasurement = max30102Sensor.getMetrics(&lastMeasurement);
-        if (hasMeasurement) {
-            usingLocalCache = true;
-            lastSender = "Local";
-        }
-    }
-
-    if (!hasMeasurement && lastMeasurementPacket != nullptr) {
-        lastSender = getSenderShortName(*lastMeasurementPacket);
-        const meshtastic_Data &p = lastMeasurementPacket->decoded;
-        if (!pb_decode_from_bytes(p.payload.bytes, p.payload.size, &meshtastic_Telemetry_msg, &lastMeasurement)) {
-            display->drawString(x, y, "Measurement Error");
-            LOG_ERROR("Unable to decode last packet");
-            return;
-        }
-        hasMeasurement = true;
     }
 
     if (!hasMeasurement) {
-        display->drawString(x, y, "Health");
-        display->drawString(x, y + fontHeight, "No measurement");
+        display->drawString(x, y + fontHeight, "Sensing...");
         return;
     }
-
-    char headerStr[48];
-    snprintf(headerStr, sizeof(headerStr), "Health: %s", lastSender);
-    display->drawString(x, y, headerStr);
 
     char hrStr[8] = "--";
     char spo2Str[8] = "--";
@@ -271,29 +287,22 @@ void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
 
     char metricLine[40];
     snprintf(metricLine, sizeof(metricLine), "HR:%s O2:%s T:%s", hrStr, spo2Str, tempStr);
-    y += fontHeight;
-    display->drawString(x, y, metricLine);
+    display->drawString(x, contentY, metricLine);
 
     uint32_t irWave[MAX30102_BUFFER_LEN];
     uint32_t redWave[MAX30102_BUFFER_LEN];
     uint16_t waveCount = 0;
 
-    const bool packetFromUs = (lastMeasurementPacket != nullptr) && isFromUs(lastMeasurementPacket);
-    const bool shouldShowLocalWaveform = usingLocalCache || packetFromUs;
-    const bool hasLocalWaveform = shouldShowLocalWaveform &&
-                                  max30102Sensor.getRawWaveformSnapshot(irWave, redWave, MAX30102_BUFFER_LEN, &waveCount);
+    const bool hasLocalWaveform =
+        max30102Sensor.getRawWaveformSnapshot(irWave, redWave, MAX30102_BUFFER_LEN, &waveCount);
     if (!hasLocalWaveform) {
-        y += fontHeight;
-        if (shouldShowLocalWaveform) {
-            display->drawString(x, y, "Waveform pending...");
-        } else {
-            display->drawString(x, y, "Remote metrics only");
-        }
+        contentY += fontHeight;
+        display->drawString(x, contentY, "Place Finger on Sensor...");
         return;
     }
 
-    y += fontHeight;
-    const int16_t graphTop = y + 1;
+    contentY += fontHeight;
+    const int16_t graphTop = contentY + 1;
     const int16_t graphHeight = display->getHeight() - graphTop;
     const int16_t graphWidth = display->getWidth();
     const int16_t laneGap = 2;
@@ -301,12 +310,14 @@ void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     const int16_t lane2Height = graphHeight - laneHeight - laneGap;
 
     if (laneHeight < 6 || lane2Height < 6) {
-        display->drawString(x, y, "Waveform area too small");
+        display->drawString(x, contentY, "Waveform area too small");
         return;
     }
 
     drawWaveformLane(display, irWave, waveCount, x, graphTop, graphWidth, laneHeight, "IR");
     drawWaveformLane(display, redWave, waveCount, x, graphTop + laneHeight + laneGap, graphWidth, lane2Height, "RED");
+
+    graphics::drawCommonFooter(display, x, y);
 }
 
 bool HealthTelemetryModule::handleReceivedProtobuf(const meshtastic_MeshPacket &mp, meshtastic_Telemetry *t)

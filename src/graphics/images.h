@@ -223,6 +223,18 @@ const uint8_t icon_module[] PROGMEM = {
     0b00011000  // ░░░██░░░
 };
 
+// ❤️ Heart (e.g. health / pulse oximeter)
+const uint8_t icon_heart[] PROGMEM = {
+    0b01100110, // ░██░░██░
+    0b11111111, // ████████
+    0b11111111, // ████████
+    0b11111111, // ████████
+    0b01111110, // ░██████░
+    0b00111100, // ░░████░░
+    0b00011000, // ░░░██░░░
+    0b00000000  // ░░░░░░░░
+};
+
 #define mute_symbol_width 8
 #define mute_symbol_height 8
 const uint8_t mute_symbol[] PROGMEM = {
