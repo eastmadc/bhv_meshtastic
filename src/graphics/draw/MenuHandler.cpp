@@ -2450,6 +2450,7 @@ void menuHandler::frameTogglesMenu()
         show_env_telemetry,
         show_aq_telemetry,
         show_power,
+        show_health_telemetry,
         enumEnd
     };
     static const char *optionsArray[enumEnd] = {"Finish"};
@@ -2501,6 +2502,9 @@ void menuHandler::frameTogglesMenu()
 
     optionsArray[options] = moduleConfig.telemetry.power_screen_enabled ? "Hide Power" : "Show Power";
     optionsEnumArray[options++] = show_power;
+
+    optionsArray[options] = moduleConfig.telemetry.health_screen_enabled ? "Hide Health Telemetry" : "Show Health Telemetry";
+    optionsEnumArray[options++] = show_health_telemetry;
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Show/Hide Frames";
@@ -2570,6 +2574,14 @@ void menuHandler::frameTogglesMenu()
             screen->runNow();
         } else if (selected == show_power) {
             moduleConfig.telemetry.power_screen_enabled = !moduleConfig.telemetry.power_screen_enabled;
+            menuHandler::menuQueue = menuHandler::FrameToggles;
+            screen->runNow();
+        } else if (selected == show_health_telemetry) {
+            moduleConfig.telemetry.health_screen_enabled = !moduleConfig.telemetry.health_screen_enabled;
+            // Health frame is useful only when the module is actively measuring.
+            if (moduleConfig.telemetry.health_screen_enabled) {
+                moduleConfig.telemetry.health_measurement_enabled = true;
+            }
             menuHandler::menuQueue = menuHandler::FrameToggles;
             screen->runNow();
         }

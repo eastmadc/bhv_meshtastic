@@ -922,6 +922,13 @@ void NodeDB::installDefaultModuleConfig()
     moduleConfig.ambient_lighting.blue = myNodeInfo.my_node_num & 0x0000FF;
 
     initModuleConfigIntervals();
+
+#if defined(HELTEC_V4) || defined(HELTEC_V4_TFT)
+    // Enable health telemetry by default for Heltec V4 builds so MAX30102
+    // readings are visible on-device after a fresh config install.
+    moduleConfig.telemetry.health_measurement_enabled = true;
+    moduleConfig.telemetry.health_screen_enabled = true;
+#endif
 }
 
 void NodeDB::installRoleDefaults(meshtastic_Config_DeviceConfig_Role role)

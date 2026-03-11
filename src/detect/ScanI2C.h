@@ -65,6 +65,7 @@ class ScanI2C
         STK8BAXX,
         ICM20948,
         SCD4X,
+        MAX30100,
         MAX30102,
         TPS65233,
         MPR121KB,

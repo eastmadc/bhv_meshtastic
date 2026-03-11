@@ -50,11 +50,15 @@ class HealthTelemetryModule : private concurrency::OSThread,
      * Send our Telemetry into the mesh
      */
     bool sendTelemetry(NodeNum dest = NODENUM_BROADCAST, bool wantReplies = false);
+    bool updateLocalMeasurement();
 
   private:
     bool firstTime = 1;
     meshtastic_MeshPacket *lastMeasurementPacket;
+    uint32_t sensorServiceIntervalMs = 200;                 // Service MAX3010x FIFO/algorithm every 200ms
+    uint32_t healthPollIntervalMs = 1 * 1000;               // Refresh local OLED measurement packet every second
     uint32_t sendToPhoneIntervalMs = SECONDS_IN_MINUTE * 1000; // Send to phone every minute
+    uint32_t lastLocalMeasurementAttemptMs = 0;
     uint32_t lastSentToPhone = 0;
     uint32_t sensor_read_error_count = 0;
 };

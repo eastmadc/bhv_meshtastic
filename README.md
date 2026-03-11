@@ -30,6 +30,7 @@ Meshtastic enables text messaging, location sharing, and telemetry over a decent
 ### Get Started
 
 - 🔧 **[Building Instructions](https://meshtastic.org/docs/development/firmware/build)** – Learn how to compile the firmware from source.
+- 🧰 **[Local Heltec V4 Setup (uv + .venv)](README-heltec-v4-setup.md)** – Build `heltec-v4` and `heltec-v4-tft` locally with PlatformIO.
 - ⚡ **[Flashing Instructions](https://meshtastic.org/docs/getting-started/flashing-firmware/)** – Install or update the firmware on your device.
 
 Join our community and help improve Meshtastic! 🚀

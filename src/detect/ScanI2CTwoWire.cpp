@@ -463,11 +463,15 @@ void ScanI2CTwoWire::scanPort(I2CPort port, uint8_t *address, uint8_t asize)
 
                 SCAN_SIMPLE_CASE(SHTC3_ADDR, SHTC3, "SHTC3", (uint8_t)addr.address)
             case RCWL9620_ADDR:
-                // get MAX30102 PARTID
+                // MAX3010x and RCWL9620 share address 0x57, disambiguate by part ID
                 registerValue = getRegisterValue(ScanI2CTwoWire::RegisterLocation(addr, 0xFF), 1);
                 if (registerValue == 0x15) {
                     type = MAX30102;
                     logFoundDevice("MAX30102", (uint8_t)addr.address);
+                    break;
+                } else if (registerValue == 0x11) {
+                    type = MAX30100;
+                    logFoundDevice("MAX30100", (uint8_t)addr.address);
                     break;
                 } else {
                     type = RCWL9620;

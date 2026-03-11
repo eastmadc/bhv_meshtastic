@@ -83,6 +83,9 @@
 #define GPS_RESET_MODE LOW
 #define PIN_GPS_EN (34)
 #define GPS_EN_ACTIVE LOW
+// Power external peripherals (I2C QuickLink / HR sensor rail) before I2C scanning.
+#define SENSOR_POWER_CTRL_PIN PIN_GPS_EN
+#define SENSOR_POWER_ON GPS_EN_ACTIVE
 #define PERIPHERAL_WARMUP_MS 1000 // Make sure I2C QuickLink has stable power before continuing
 #define PIN_GPS_STANDBY (40)      // An output to wake GPS, low means allow sleep, high means force wake
 #define PIN_GPS_PPS (41)
