@@ -64,7 +64,7 @@ class UIRenderer
     static void rebuildFavoritedNodes();
 
 // OEM screens
-#ifdef USERPREFS_OEM_TEXT
+#ifdef USERPREFS_OEM_IMAGE_DATA
     static void drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
     static void drawOEMBootScreen(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y);
 #endif

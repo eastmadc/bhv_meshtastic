@@ -1325,38 +1325,44 @@ void UIRenderer::drawCompassAndLocationScreen(OLEDDisplay *display, OLEDDisplayU
     graphics::drawCommonFooter(display, x, y);
 }
 
-#ifdef USERPREFS_OEM_TEXT
+#ifdef USERPREFS_OEM_IMAGE_DATA
 
 void UIRenderer::drawOEMIconScreen(const char *upperMsg, OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     static const uint8_t xbm[] = USERPREFS_OEM_IMAGE_DATA;
+    const int imageYOffset = FONT_HEIGHT_SMALL;
     if (currentResolution == ScreenResolution::High) {
         display->drawXbm(x + (SCREEN_WIDTH - USERPREFS_OEM_IMAGE_WIDTH) / 2,
-                         y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - USERPREFS_OEM_IMAGE_HEIGHT) / 2 + 2, USERPREFS_OEM_IMAGE_WIDTH,
-                         USERPREFS_OEM_IMAGE_HEIGHT, xbm);
+                         y + (SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM - USERPREFS_OEM_IMAGE_HEIGHT) / 2 + 2 + imageYOffset,
+                         USERPREFS_OEM_IMAGE_WIDTH, USERPREFS_OEM_IMAGE_HEIGHT, xbm);
     } else {
 
         display->drawXbm(x + (SCREEN_WIDTH - USERPREFS_OEM_IMAGE_WIDTH) / 2,
-                         y + (SCREEN_HEIGHT - USERPREFS_OEM_IMAGE_HEIGHT) / 2 + 2, USERPREFS_OEM_IMAGE_WIDTH,
+                         y + (SCREEN_HEIGHT - USERPREFS_OEM_IMAGE_HEIGHT) / 2 + 2 + imageYOffset, USERPREFS_OEM_IMAGE_WIDTH,
                          USERPREFS_OEM_IMAGE_HEIGHT, xbm);
     }
 
-    switch (USERPREFS_OEM_FONT_SIZE) {
-    case 0:
-        display->setFont(FONT_SMALL);
-        break;
-    case 2:
-        display->setFont(FONT_LARGE);
-        break;
-    default:
-        display->setFont(FONT_MEDIUM);
-        break;
-    }
-
     display->setTextAlignment(TEXT_ALIGN_LEFT);
-    const char *title = USERPREFS_OEM_TEXT;
     if (currentResolution == ScreenResolution::High) {
+#ifdef USERPREFS_OEM_FONT_SIZE
+        switch (USERPREFS_OEM_FONT_SIZE) {
+        case 0:
+            display->setFont(FONT_SMALL);
+            break;
+        case 2:
+            display->setFont(FONT_LARGE);
+            break;
+        default:
+            display->setFont(FONT_MEDIUM);
+            break;
+        }
+#else
+        display->setFont(FONT_MEDIUM);
+#endif
+#ifdef USERPREFS_OEM_TEXT
+        const char *title = USERPREFS_OEM_TEXT;
         display->drawString(x + getStringCenteredX(title), y + SCREEN_HEIGHT - FONT_HEIGHT_MEDIUM, title);
+#endif
     }
     display->setFont(FONT_SMALL);
 

@@ -652,7 +652,11 @@ void Screen::setup()
 #endif
         {
             const char *region = myRegion ? myRegion->name : nullptr;
+#if defined(USERPREFS_OEM_IMAGE_DATA) && !defined(USERPREFS_OEM_TEXT)
+            graphics::UIRenderer::drawOEMIconScreen(region, display, state, x, y);
+#else
             graphics::UIRenderer::drawIconScreen(region, display, state, x, y);
+#endif
         }
     };
     ui->setFrames(alertFrames, 1);
