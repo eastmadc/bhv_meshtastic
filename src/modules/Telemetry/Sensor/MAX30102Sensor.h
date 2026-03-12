@@ -55,7 +55,7 @@ class MAX30102Sensor : public TelemetrySensor
     static constexpr uint8_t MAX30100_RAW_TO_ALGO_DECIMATION = 2; // 50Hz sensor output -> 25Hz algorithm input
     static constexpr uint16_t MAX3010X_SLIDING_STEP = 10;
     static constexpr uint8_t STABILITY_WINDOW_SIZE = 5;
-    static constexpr uint8_t STABILITY_MIN_COUNT = 3;
+    static constexpr uint8_t STABILITY_MIN_COUNT = 2;
     static constexpr uint32_t HR_STABILITY_PERCENT = 20;
     static constexpr uint32_t SPO2_STABILITY_SPREAD = 2;
     static constexpr uint32_t MAX3010X_FINGER_IR_DC_MIN = 2000;
@@ -81,8 +81,8 @@ class MAX30102Sensor : public TelemetrySensor
     static constexpr int32_t SPO2_INVALID_SENTINEL = -999;
     static constexpr uint32_t MAX3010X_EVAL_MIN_INTERVAL_MS = 500; // Limit HR/SpO2 algorithm cadence to ~2Hz
     static constexpr uint32_t STABLE_VALUE_HOLD_MS = 5000; // Keep last stable value briefly during transient instability
-    static constexpr float HEART_EMA_ALPHA = 0.2f;         // BPM_filtered = 0.8*prev + 0.2*new
-    static constexpr float HEART_OUTPUT_EMA_ALPHA = 0.35f; // Additional smoothing for displayed/latched HR
+    static constexpr float HEART_EMA_ALPHA = 0.35f;        // Faster convergence while retaining smoothing
+    static constexpr float HEART_OUTPUT_EMA_ALPHA = 0.55f; // Faster displayed HR lock-in
     static constexpr uint8_t MAX30102_LED_POWER_PRESENCE = 0x02;
     /** Default active LED power; higher (e.g. 0x2F) improves SpO2 algorithm success vs 0x1F. */
     static constexpr uint8_t MAX30102_LED_POWER_ACTIVE_DEFAULT = 0x2F;

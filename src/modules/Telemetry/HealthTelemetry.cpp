@@ -197,6 +197,9 @@ int32_t HealthTelemetryModule::runOnce()
             e.action = UIFrameEvent::Action::REGENERATE_FRAMESET;
             notifyObservers(&e);
             lastHrEngaged = true;
+        } else if (lastHrEngaged && engaged) {
+            // Keep refreshing screen wake while finger remains present so the normal screen timeout does not blank the display.
+            screen->setOn(true);
         } else if (lastHrEngaged && !engaged) {
             if (hrAutoWokeScreen) {
                 screen->setOn(false);
@@ -237,6 +240,24 @@ int32_t HealthTelemetryModule::runOnce()
 bool HealthTelemetryModule::wantUIFrame()
 {
     return moduleConfig.telemetry.health_screen_enabled;
+}
+
+bool HealthTelemetryModule::getCurrentHeartBpm(uint8_t *bpmOut) const
+{
+    meshtastic_Telemetry measurement = meshtastic_Telemetry_init_zero;
+    if (!max30102Sensor.getMetrics(&measurement) || !measurement.variant.health_metrics.has_heart_bpm) {
+        return false;
+    }
+
+    if (bpmOut) {
+        *bpmOut = measurement.variant.health_metrics.heart_bpm;
+    }
+    return true;
+}
+
+bool HealthTelemetryModule::isHeartRateActive() const
+{
+    return max30102Sensor.hasSensor() && max30102Sensor.isHrEngaged();
 }
 
 void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)

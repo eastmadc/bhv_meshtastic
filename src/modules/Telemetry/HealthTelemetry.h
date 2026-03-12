@@ -38,6 +38,8 @@ class HealthTelemetryModule : private concurrency::OSThread,
 
     virtual bool wantUIFrame() override;
     virtual Observable<const UIFrameEvent *> *getUIFrameObservable() override { return this; }
+    bool getCurrentHeartBpm(uint8_t *bpmOut) const;
+    bool isHeartRateActive() const;
 
   protected:
     /** Called to handle a particular incoming message

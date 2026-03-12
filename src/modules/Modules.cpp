@@ -104,6 +104,9 @@
 #if !MESHTASTIC_EXCLUDE_STATUS
 #include "modules/StatusMessageModule.h"
 #endif
+#ifdef HAS_HEARTBEAT_NEOPIXELS
+#include "HeartbeatPixelThread.h"
+#endif
 
 #if defined(HAS_HARDWARE_WATCHDOG)
 #include "watchdog/watchdogThread.h"
@@ -209,6 +212,9 @@ void setupModules()
         nodeTelemetrySensorsMap[meshtastic_TelemetrySensorType_MLX90614].first > 0) {
         healthTelemetryModule = new HealthTelemetryModule();
     }
+#endif
+#ifdef HAS_HEARTBEAT_NEOPIXELS
+    new HeartbeatPixelThread();
 #endif
 #if HAS_TELEMETRY && !MESHTASTIC_EXCLUDE_POWER_TELEMETRY && !MESHTASTIC_EXCLUDE_ENVIRONMENTAL_SENSOR
     if (moduleConfig.has_telemetry &&
