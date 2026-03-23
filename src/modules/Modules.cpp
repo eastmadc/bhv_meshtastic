@@ -22,6 +22,7 @@
 #if !MESHTASTIC_EXCLUDE_DETECTIONSENSOR
 #include "modules/DetectionSensorModule.h"
 #endif
+#include "modules/LocalLedCommandModule.h"
 #if !MESHTASTIC_EXCLUDE_NEIGHBORINFO
 #include "modules/NeighborInfoModule.h"
 #endif
@@ -139,6 +140,7 @@ void setupModules()
 #if !MESHTASTIC_EXCLUDE_WAYPOINT
     waypointModule = new WaypointModule();
 #endif
+    new LocalLedCommandModule();
 #if !MESHTASTIC_EXCLUDE_TEXTMESSAGE
     textMessageModule = new TextMessageModule();
 #endif

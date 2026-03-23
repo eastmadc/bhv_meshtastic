@@ -18,21 +18,18 @@ const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::startupConfig[H
 };
 
 const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::heartbeatConfig[HeartbeatPixelThread::kLedCount] = {
-    {0.6484f, 0.5508f}, {0.6712f, 0.7581f}, {0.1585f, 0.4541f}, {0.2585f, 0.3041f}, {0.4508f, 0.4450f},
+    {0.6584f, 0.5908f}, {0.6712f, 0.7581f}, {0.1585f, 0.4541f}, {0.2585f, 0.3041f}, {0.4508f, 0.4550f},
     {0.5223f, 0.4670f}, {0.6000f, 0.3256f}, {0.6712f, 0.7581f}, {0.1585f, 0.4541f}, {0.2589f, 0.3016f},
-    {0.4513f, 0.4420f}, {0.5723f, 0.2660f}, {0.5862f, 0.2656f}, {0.6032f, 0.3256f},
+    {0.4513f, 0.4520f}, {0.5723f, 0.2860f}, {0.5862f, 0.2856f}, {0.6032f, 0.3256f},
 };
 
-const HeartbeatPixelThread::RgbColor HeartbeatPixelThread::heartColors[HeartbeatPixelThread::kLedCount] = {
-    {0x00, 0x00, 0xff}, {0x00, 0x00, 0xff}, {0x00, 0x00, 0xff}, {0x00, 0x00, 0xff}, {0x00, 0x00, 0xff},
-    {0x00, 0x00, 0xff}, {0x00, 0x00, 0xff}, {0xff, 0x00, 0x00}, {0xff, 0x00, 0x00}, {0xff, 0x00, 0x00},
-    {0xff, 0x00, 0x00}, {0xff, 0x00, 0x00}, {0xff, 0x00, 0x00}, {0xff, 0x00, 0x00},
+const float HeartbeatPixelThread::kPixelBrightnessModifiers[HeartbeatPixelThread::kLedCount] = {
+    0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 0.8f, 0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 0.8f, 0.8f, 0.8f,
 };
 
 HeartbeatPixelThread::HeartbeatPixelThread()
     : concurrency::OSThread("HeartbeatPixels", kAnimationIntervalMs),
-      leftPixels(kCountPerStrip, HEARTBEAT_NEOPIXEL_LEFT_PIN, HEARTBEAT_NEOPIXEL_TYPE),
-      rightPixels(kCountPerStrip, HEARTBEAT_NEOPIXEL_RIGHT_PIN, HEARTBEAT_NEOPIXEL_TYPE)
+      pixels(kLedCount, HEARTBEAT_NEOPIXEL_LEFT_PIN, HEARTBEAT_NEOPIXEL_TYPE)
 {
     notifyDeepSleepObserver.observe(&notifyDeepSleep);
 }
@@ -45,6 +42,10 @@ int32_t HeartbeatPixelThread::runOnce()
     }
 
     const uint32_t nowMs = millis();
+    if (nextFrameMs == 0) {
+        nextFrameMs = nowMs;
+    }
+
     if (runningStartup) {
         renderStartupFrame(nowMs);
         if ((nowMs - startupStartMs) >= (uint32_t)(60000.0f / kStartupBpm)) {
@@ -52,46 +53,78 @@ int32_t HeartbeatPixelThread::runOnce()
             idleOff();
         }
     } else {
+        const LocalLedEffectiveConfig effective =
+            localLedConfigStore ? localLedConfigStore->getEffectiveConfigForActiveChannel()
+                                : LocalLedEffectiveConfig{0x0000FF, 0xFF0000, 80, 0, false, 0};
         bool heartRateActive = false;
 #if !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY
         heartRateActive = healthTelemetryModule && healthTelemetryModule->isHeartRateActive();
 #endif
         if (heartRateActive) {
             syncBpm(nowMs);
-            renderHeartbeatFrame(nowMs);
+            renderHeartbeatFrame(nowMs, effective);
         } else if (!config.device.led_heartbeat_disabled) {
-            currentBpm = kDefaultBpm;
-            renderHeartbeatFrame(nowMs);
+            currentBpm = effective.idle_bpm;
+            renderHeartbeatFrame(nowMs, effective);
         } else {
-            currentBpm = kDefaultBpm;
+            currentBpm = effective.idle_bpm;
             heartbeatOffsetMs = 0.0f;
             idleOff();
         }
     }
 
-    return kAnimationIntervalMs;
+    uint32_t targetNextFrameMs = nextFrameMs + kAnimationIntervalMs;
+    if ((int32_t)(nowMs - targetNextFrameMs) >= 0) {
+        targetNextFrameMs = nowMs + kAnimationIntervalMs;
+    }
+    nextFrameMs = targetNextFrameMs;
+
+    return RUN_SAME;
+}
+
+bool HeartbeatPixelThread::shouldRun(unsigned long time)
+{
+    if (!enabled) {
+        return false;
+    }
+    if (nextFrameMs == 0) {
+        return true;
+    }
+    return (int32_t)(time - nextFrameMs) >= 0;
+}
+
+long HeartbeatPixelThread::tillRun(unsigned long time)
+{
+    if (!enabled) {
+        return __LONG_MAX__;
+    }
+    if (nextFrameMs == 0) {
+        return 0;
+    }
+    return (long)((int32_t)(nextFrameMs - time));
 }
 
 void HeartbeatPixelThread::initializeHardware()
 {
     powerStrips(true);
-    leftPixels.begin();
-    rightPixels.begin();
+    pixels.begin();
     clearStrips();
     initialized = true;
 }
 
 void HeartbeatPixelThread::renderStartupFrame(uint32_t nowMs)
 {
-    const float cycleTimeMs = 60000.0f / kStartupBpm;
-    const float elapsedMs = (float)(nowMs - startupStartMs);
-    applyFrame(cycleTimeMs, elapsedMs, startupConfig);
+    const double cycleTimeMs = 60000.0 / (double)kStartupBpm;
+    const double elapsedMs = (double)(nowMs - startupStartMs);
+    LocalLedEffectiveConfig startupEffective = {0x0000FF, 0xFF0000, kStartupBpm, 0, true, 0};
+    applyFrame(cycleTimeMs, cycleTimeMs, elapsedMs, startupConfig, startupEffective);
 }
 
-void HeartbeatPixelThread::renderHeartbeatFrame(uint32_t nowMs)
+void HeartbeatPixelThread::renderHeartbeatFrame(uint32_t nowMs, const LocalLedEffectiveConfig &effective)
 {
-    const float cycleTimeMs = 60000.0f / currentBpm;
-    applyFrame(cycleTimeMs, (float)nowMs + heartbeatOffsetMs, heartbeatConfig);
+    const double activeWindowMs = 60000.0 / (double)currentBpm;
+    const double cycleTimeMs = activeWindowMs + (double)effective.idle_delay_ms;
+    applyFrame(cycleTimeMs, activeWindowMs, (double)nowMs + heartbeatOffsetMs, heartbeatConfig, effective);
 }
 
 void HeartbeatPixelThread::idleOff()
@@ -101,29 +134,32 @@ void HeartbeatPixelThread::idleOff()
     }
 }
 
-void HeartbeatPixelThread::applyFrame(float cycleTimeMs, float currentTimeMs, const LedPulseConfig *config)
+void HeartbeatPixelThread::applyFrame(double cycleTimeMs, double activeWindowMs, double currentTimeMs, const LedPulseConfig *config,
+                                      const LocalLedEffectiveConfig &effective)
 {
+    const RgbColor led1Color = colorFromHex(effective.led1_color);
+    const RgbColor led2Color = colorFromHex(effective.led2_color);
     for (uint8_t i = 0; i < kLedCount; ++i) {
         const float brightness =
-            calculateBrightness(cycleTimeMs, currentTimeMs, config[i].startTime * cycleTimeMs, config[i].pulseWidth * cycleTimeMs);
-        setPixel(i, heartColors[i], brightness);
+            calculateBrightness(cycleTimeMs, currentTimeMs, config[i].startTime * activeWindowMs, config[i].pulseWidth * activeWindowMs);
+        setPixel(i, i < kCountPerStrip ? led1Color : led2Color, brightness);
     }
     showStrips();
 }
 
-float HeartbeatPixelThread::calculateBrightness(float cycleTimeMs, float currentTimeMs, float startTimeMs, float pulseWidthMs) const
+float HeartbeatPixelThread::calculateBrightness(double cycleTimeMs, double currentTimeMs, double startTimeMs, double pulseWidthMs) const
 {
-    const float wrappedTime = fmodf(currentTimeMs, cycleTimeMs);
-    const float endTimeMs = startTimeMs + pulseWidthMs;
+    const double wrappedTime = fmod(currentTimeMs, cycleTimeMs);
+    const double endTimeMs = startTimeMs + pulseWidthMs;
 
-    if ((endTimeMs < cycleTimeMs) && (wrappedTime >= startTimeMs) && (wrappedTime <= fmodf(endTimeMs, cycleTimeMs))) {
-        return 0.5f - 0.5f * cosf((wrappedTime - startTimeMs) / pulseWidthMs * 2.0f * PI);
+    if ((endTimeMs < cycleTimeMs) && (wrappedTime >= startTimeMs) && (wrappedTime <= fmod(endTimeMs, cycleTimeMs))) {
+        return (float)(0.5 - 0.5 * cos((wrappedTime - startTimeMs) / pulseWidthMs * 2.0 * PI));
     }
-    if ((endTimeMs > cycleTimeMs) && ((wrappedTime >= startTimeMs) || (wrappedTime <= fmodf(endTimeMs, cycleTimeMs)))) {
+    if ((endTimeMs > cycleTimeMs) && ((wrappedTime >= startTimeMs) || (wrappedTime <= fmod(endTimeMs, cycleTimeMs)))) {
         if (wrappedTime >= startTimeMs) {
-            return 0.5f - 0.5f * cosf((wrappedTime - startTimeMs) / pulseWidthMs * 2.0f * PI);
+            return (float)(0.5 - 0.5 * cos((wrappedTime - startTimeMs) / pulseWidthMs * 2.0 * PI));
         }
-        return 0.5f - 0.5f * cosf((wrappedTime + cycleTimeMs - startTimeMs) / pulseWidthMs * 2.0f * PI);
+        return (float)(0.5 - 0.5 * cos((wrappedTime + cycleTimeMs - startTimeMs) / pulseWidthMs * 2.0 * PI));
     }
 
     return 0.0f;
@@ -135,8 +171,9 @@ void HeartbeatPixelThread::syncBpm(uint32_t nowMs)
     uint8_t measuredBpm = 0;
     if (healthTelemetryModule && healthTelemetryModule->getCurrentHeartBpm(&measuredBpm) && measuredBpm >= 30 && measuredBpm <= 220 &&
         measuredBpm != currentBpm) {
-        const float currentCycleMs = 60000.0f / currentBpm;
-        heartbeatOffsetMs = fmodf((float)nowMs + heartbeatOffsetMs, currentCycleMs) * currentBpm / measuredBpm - (float)nowMs;
+        const double currentCycleMs = 60000.0 / (double)currentBpm;
+        heartbeatOffsetMs = fmod((double)nowMs + heartbeatOffsetMs, currentCycleMs) * (double)currentBpm / (double)measuredBpm -
+                            (double)nowMs;
         currentBpm = measuredBpm;
     }
 #else
@@ -144,31 +181,30 @@ void HeartbeatPixelThread::syncBpm(uint32_t nowMs)
 #endif
 }
 
+HeartbeatPixelThread::RgbColor HeartbeatPixelThread::colorFromHex(uint32_t color)
+{
+    return RgbColor{(uint8_t)((color >> 16) & 0xFF), (uint8_t)((color >> 8) & 0xFF), (uint8_t)(color & 0xFF)};
+}
+
 void HeartbeatPixelThread::setPixel(uint8_t index, const RgbColor &color, float brightness)
 {
-    const uint8_t red = (uint8_t)roundf((float)color.red * kOutputScale * brightness);
-    const uint8_t green = (uint8_t)roundf((float)color.green * kOutputScale * brightness);
-    const uint8_t blue = (uint8_t)roundf((float)color.blue * kOutputScale * brightness);
-    const uint32_t pixelColor = leftPixels.Color(red, green, blue);
-
-    if (index < kCountPerStrip) {
-        leftPixels.setPixelColor(index, pixelColor);
-    } else {
-        rightPixels.setPixelColor(index - kCountPerStrip, pixelColor);
-    }
+    const float scaledBrightness = brightness * kPixelBrightnessModifiers[index];
+    const uint8_t red = (uint8_t)roundf((float)color.red * kOutputScale * scaledBrightness);
+    const uint8_t green = (uint8_t)roundf((float)color.green * kOutputScale * scaledBrightness);
+    const uint8_t blue = (uint8_t)roundf((float)color.blue * kOutputScale * scaledBrightness);
+    const uint32_t pixelColor = pixels.Color(red, green, blue);
+    pixels.setPixelColor(index, pixelColor);
 }
 
 void HeartbeatPixelThread::showStrips()
 {
-    leftPixels.show();
-    rightPixels.show();
+    pixels.show();
     stripsAreDark = false;
 }
 
 void HeartbeatPixelThread::clearStrips()
 {
-    leftPixels.clear();
-    rightPixels.clear();
+    pixels.clear();
     showStrips();
     stripsAreDark = true;
 }

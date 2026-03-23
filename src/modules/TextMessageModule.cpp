@@ -8,6 +8,7 @@
 #include "graphics/Screen.h"
 #include "graphics/SharedUIDisplay.h"
 #include "graphics/draw/MessageRenderer.h"
+#include "led/LocalLedConfig.h"
 #include "main.h"
 TextMessageModule *textMessageModule;
 
@@ -20,6 +21,11 @@ ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp
     // add packet ID to the rolling list of packets
     textPacketList[textPacketListIndex] = mp.id;
     textPacketListIndex = (textPacketListIndex + 1) % TEXT_PACKET_LIST_SIZE;
+
+    uint8_t resolvedChannel = 0;
+    if (localLedConfigStore && localLedResolveIncomingChannel(mp, &resolvedChannel)) {
+        localLedConfigStore->setActiveChannel(resolvedChannel);
+    }
 
     // We only store/display messages destined for us.
     devicestate.rx_text_message = mp;

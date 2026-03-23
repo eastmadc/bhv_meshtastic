@@ -31,6 +31,7 @@
 #endif
 #include "detect/einkScan.h"
 #include "graphics/Screen.h"
+#include "led/LocalLedConfig.h"
 #include "main.h"
 #include "mesh/generated/meshtastic/config.pb.h"
 #include "meshUtils.h"
@@ -705,6 +706,7 @@ void setup()
     // We do this as early as possible because this loads preferences from flash
     // but we need to do this after main cpu init (esp32setup), because we need the random seed set
     nodeDB = new NodeDB;
+    setupLocalLedConfigStore();
 
     // Initialize transmit history to persist broadcast throttle timers across reboots
     TransmitHistory::getInstance()->loadFromDisk();
