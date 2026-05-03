@@ -44,6 +44,7 @@ class HeartbeatPixelThread : private concurrency::OSThread
     static constexpr float kOutputScale = 0.35f;
     static constexpr uint16_t kStartupBpm = 80;
     static const float kPixelBrightnessModifiers[kLedCount];
+    static const bool kPixelUsesLed1Color[kLedCount];
 
     Adafruit_NeoPixel pixels;
 

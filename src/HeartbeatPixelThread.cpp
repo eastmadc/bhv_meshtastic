@@ -11,20 +11,26 @@
 #include <Arduino.h>
 #include <math.h>
 
+// Pattern arrays are stored directly in the current physical LED order:
+// new D1..D14 = old D4, D3, D2, D1, D12, D13, D14, D7, D6, D8, D11, D5, D9, D10.
 const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::startupConfig[HeartbeatPixelThread::kLedCount] = {
-    {0.3237f, 0.50f}, {0.2016f, 0.50f}, {0.0873f, 0.50f}, {0.0972f, 0.50f}, {0.0760f, 0.50f}, {0.2154f, 0.50f},
-    {0.2739f, 0.50f}, {0.1781f, 0.50f}, {0.1110f, 0.50f}, {0.1004f, 0.50f}, {0.0967f, 0.50f}, {0.2241f, 0.50f},
-    {0.3065f, 0.50f}, {0.3417f, 0.50f},
+    {0.0972f, 0.50f}, {0.0873f, 0.50f}, {0.2016f, 0.50f}, {0.3237f, 0.50f}, {0.2241f, 0.50f}, {0.3065f, 0.50f},
+    {0.3417f, 0.50f}, {0.2739f, 0.50f}, {0.2154f, 0.50f}, {0.1781f, 0.50f}, {0.0967f, 0.50f}, {0.0760f, 0.50f},
+    {0.1110f, 0.50f}, {0.1004f, 0.50f},
 };
 
 const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::heartbeatConfig[HeartbeatPixelThread::kLedCount] = {
-    {0.6584f, 0.5908f}, {0.6712f, 0.7581f}, {0.1585f, 0.4541f}, {0.2585f, 0.3041f}, {0.4508f, 0.4550f},
-    {0.5223f, 0.4670f}, {0.6000f, 0.3256f}, {0.6712f, 0.7581f}, {0.1585f, 0.4541f}, {0.2589f, 0.3016f},
-    {0.4513f, 0.4520f}, {0.5723f, 0.2860f}, {0.5862f, 0.2856f}, {0.6032f, 0.3256f},
+    {0.2585f, 0.3041f}, {0.1585f, 0.4541f}, {0.6712f, 0.7581f}, {0.6584f, 0.5908f}, {0.5723f, 0.2860f},
+    {0.6145f, 0.2856f}, {0.6566f, 0.3256f}, {0.7100f, 0.3200f}, {0.5223f, 0.4670f}, {0.6712f, 0.7581f},
+    {0.4513f, 0.4520f}, {0.4508f, 0.4550f}, {0.1585f, 0.4541f}, {0.2589f, 0.3016f},
 };
 
 const float HeartbeatPixelThread::kPixelBrightnessModifiers[HeartbeatPixelThread::kLedCount] = {
-    0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 0.8f, 0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 0.8f, 0.8f, 0.8f,
+    1.0f, 1.0f, 1.0f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+};
+
+const bool HeartbeatPixelThread::kPixelUsesLed1Color[HeartbeatPixelThread::kLedCount] = {
+    true, true, true, true, false, false, false, true, true, false, false, true, false, false,
 };
 
 HeartbeatPixelThread::HeartbeatPixelThread()
@@ -142,7 +148,7 @@ void HeartbeatPixelThread::applyFrame(double cycleTimeMs, double activeWindowMs,
     for (uint8_t i = 0; i < kLedCount; ++i) {
         const float brightness =
             calculateBrightness(cycleTimeMs, currentTimeMs, config[i].startTime * activeWindowMs, config[i].pulseWidth * activeWindowMs);
-        setPixel(i, i < kCountPerStrip ? led1Color : led2Color, brightness);
+        setPixel(i, kPixelUsesLed1Color[i] ? led1Color : led2Color, brightness);
     }
     showStrips();
 }
