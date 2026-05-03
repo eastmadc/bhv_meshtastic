@@ -20,8 +20,8 @@ const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::startupConfig[H
 };
 
 const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::heartbeatConfig[HeartbeatPixelThread::kLedCount] = {
-    {0.2585f, 0.3041f}, {0.1585f, 0.4541f}, {0.6712f, 0.7581f}, {0.6584f, 0.5908f}, {0.5723f, 0.2860f},
-    {0.6145f, 0.2856f}, {0.6566f, 0.3256f}, {0.7100f, 0.3200f}, {0.5223f, 0.4670f}, {0.6712f, 0.7581f},
+    {0.2585f, 0.3041f}, {0.1585f, 0.4541f}, {0.6712f, 0.7581f}, {0.5600f, 0.7200f}, {0.5723f, 0.2860f},
+    {0.6145f, 0.2856f}, {0.6566f, 0.3256f}, {0.7100f, 0.3600f}, {0.5223f, 0.4670f}, {0.6712f, 0.7581f},
     {0.4513f, 0.4520f}, {0.4508f, 0.4550f}, {0.1585f, 0.4541f}, {0.2589f, 0.3016f},
 };
 
