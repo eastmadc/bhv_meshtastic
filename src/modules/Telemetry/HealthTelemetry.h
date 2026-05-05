@@ -9,6 +9,7 @@
 #include "ProtobufModule.h"
 #include "Observer.h"
 #include "mesh/MeshModule.h"
+#include "sleep.h"
 #include <OLEDDisplay.h>
 #include <OLEDDisplayUi.h>
 
@@ -19,6 +20,8 @@ class HealthTelemetryModule : private concurrency::OSThread,
 {
     CallbackObserver<HealthTelemetryModule, const meshtastic::Status *> nodeStatusObserver =
         CallbackObserver<HealthTelemetryModule, const meshtastic::Status *>(this, &HealthTelemetryModule::handleStatusUpdate);
+    CallbackObserver<HealthTelemetryModule, void *> notifyDeepSleepObserver =
+        CallbackObserver<HealthTelemetryModule, void *>(this, &HealthTelemetryModule::handleDeepSleep);
 
   public:
     HealthTelemetryModule()
@@ -27,6 +30,7 @@ class HealthTelemetryModule : private concurrency::OSThread,
     {
         lastMeasurementPacket = nullptr;
         nodeStatusObserver.observe(&nodeStatus->onNewStatus);
+        notifyDeepSleepObserver.observe(&notifyDeepSleep);
         setIntervalFromNow(10 * 1000);
     }
 
@@ -57,6 +61,7 @@ class HealthTelemetryModule : private concurrency::OSThread,
      */
     bool sendTelemetry(NodeNum dest = NODENUM_BROADCAST, bool wantReplies = false);
     bool updateLocalMeasurement();
+    int handleDeepSleep(void *unused);
 
   private:
     bool firstTime = 1;

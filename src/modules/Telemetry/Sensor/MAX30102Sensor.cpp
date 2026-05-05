@@ -1036,6 +1036,55 @@ void MAX30102Sensor::sleep()
     }
 }
 
+void MAX30102Sensor::prepareDeepSleep()
+{
+    if (!hasSensor()) {
+        return;
+    }
+
+    keepAwake = false;
+
+    TwoWire *bus = nodeTelemetrySensorsMap[sensorType].second;
+    uint8_t address = nodeTelemetrySensorsMap[sensorType].first;
+    if (!bus || address == 0) {
+        return;
+    }
+
+    if (chipType == PulseOxChipType::MAX30102) {
+        max30102.setPulseAmplitudeRed(0x00);
+        max30102.setPulseAmplitudeIR(0x00);
+        max30102.setPulseAmplitudeGreen(0x00);
+        max30102.setPulseAmplitudeProximity(0x00);
+        max30102.clearFIFO();
+        max30102.shutDown();
+    } else if (chipType == PulseOxChipType::MAX30100) {
+        writeRegister(bus, address, MAX30100_REG_LED_CONFIG, 0x00);
+        uint8_t modeReg = 0;
+        if (readRegister(bus, address, MAX30100_REG_MODE_CONFIG, &modeReg)) {
+            writeRegister(bus, address, MAX30100_REG_MODE_CONFIG, modeReg | MAX30100_MODE_SHUTDOWN);
+        } else {
+            writeRegister(bus, address, MAX30100_REG_MODE_CONFIG, MAX30100_MODE_SHUTDOWN);
+        }
+    }
+
+    sensorActive = false;
+    max30102PresenceMode = false;
+    max30102PresenceState = false;
+    max30102PresenceTriggeredActive = false;
+    max30102PresenceActiveSinceMs = 0;
+    max30102PresenceStatsLastLogMs = 0;
+    max30102PresenceConsecutiveDetections = 0;
+    max30102PresenceScanWakeStartedMs = 0;
+    max30102PresenceScanNextWakeMs = 0;
+    poorSignalEvalStreak = 0;
+    stableSignalEvalStreak = 0;
+    resetSlidingState();
+    resetStabilityState();
+    clearRawWaveformCache();
+    clearCachedMetrics();
+    LOG_INFO("MAX3010x prepared for deep sleep");
+}
+
 uint32_t MAX30102Sensor::wakeUp()
 {
     if (!hasSensor() || sensorActive) {

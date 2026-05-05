@@ -417,6 +417,17 @@ bool HealthTelemetryModule::updateLocalMeasurement()
     return hasFreshMetrics;
 }
 
+int HealthTelemetryModule::handleDeepSleep(void *unused)
+{
+    (void)unused;
+
+    if (max30102Sensor.hasSensor()) {
+        max30102Sensor.prepareDeepSleep();
+    }
+
+    return 0;
+}
+
 meshtastic_MeshPacket *HealthTelemetryModule::allocReply()
 {
     if (!moduleConfig.telemetry.health_measurement_enabled) {

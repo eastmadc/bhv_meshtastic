@@ -59,18 +59,26 @@ BannerOverlayOptions createStaticBannerOptions(const char *message, const MenuOp
 } // namespace
 
 menuHandler::screenMenus menuHandler::menuQueue = MenuNone;
+menuHandler::screenMenus menuHandler::shutdownBackMenu = PowerMenu;
 uint32_t menuHandler::pickedNodeNum = 0;
 bool test_enabled = false;
 uint8_t test_count = 0;
 
+void menuHandler::queueShutdownMenu(screenMenus backMenu)
+{
+    shutdownBackMenu = backMenu;
+    menuQueue = ShutdownMenu;
+    screen->runNow();
+}
+
 void menuHandler::loraMenu()
 {
-    static const char *optionsArray[] = {"Back", "Device Role", "Radio Preset", "Frequency Slot", "LoRa Region"};
-    enum optionsNumbers { Back = 0, DeviceRolePicker = 1, RadioPresetPicker = 2, FrequencySlot = 3, LoraPicker = 4 };
+    static const char *optionsArray[] = {"Back", "Device Role", "Radio Preset", "Frequency Slot", "LoRa Region", "Shutdown"};
+    enum optionsNumbers { Back = 0, DeviceRolePicker = 1, RadioPresetPicker = 2, FrequencySlot = 3, LoraPicker = 4, Shutdown = 5 };
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "LoRa Actions";
     bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsCount = 5;
+    bannerOptions.optionsCount = sizeof(optionsArray) / sizeof(optionsArray[0]);
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == Back) {
             // No action
@@ -82,6 +90,8 @@ void menuHandler::loraMenu()
             menuHandler::menuQueue = menuHandler::FrequencySlot;
         } else if (selected == LoraPicker) {
             menuHandler::menuQueue = menuHandler::LoraPicker;
+        } else if (selected == Shutdown) {
+            menuHandler::queueShutdownMenu(menuHandler::LoraMenu);
         }
     };
     screen->showOverlayBanner(bannerOptions);
@@ -492,32 +502,38 @@ void menuHandler::TZPicker()
 void menuHandler::clockMenu()
 {
 #if defined(M5STACK_UNITC6L)
-    static const char *optionsArray[] = {"Back", "Time Format", "Timezone"};
+    static const char *optionsArray[] = {"Back", "Time Format", "Timezone", "Shutdown"};
+    enum optionsNumbers { Back = 0, Time = 1, Timezone = 2, Shutdown = 3 };
 #else
-    static const char *optionsArray[] = {"Back", "Clock Face", "Time Format", "Timezone"};
+    static const char *optionsArray[] = {"Back", "Clock Face", "Time Format", "Timezone", "Shutdown"};
+    enum optionsNumbers { Back = 0, Clock = 1, Time = 2, Timezone = 3, Shutdown = 4 };
 #endif
-    enum optionsNumbers { Back = 0, Clock = 1, Time = 2, Timezone = 3 };
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Clock Action";
     bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsCount = 4;
+    bannerOptions.optionsCount = sizeof(optionsArray) / sizeof(optionsArray[0]);
     bannerOptions.bannerCallback = [](int selected) -> void {
+#if !defined(M5STACK_UNITC6L)
         if (selected == Clock) {
             menuHandler::menuQueue = menuHandler::ClockFacePicker;
             screen->runNow();
-        } else if (selected == Time) {
+        } else
+#endif
+        if (selected == Time) {
             menuHandler::menuQueue = menuHandler::TwelveHourPicker;
             screen->runNow();
         } else if (selected == Timezone) {
             menuHandler::menuQueue = menuHandler::TzPicker;
             screen->runNow();
+        } else if (selected == Shutdown) {
+            menuHandler::queueShutdownMenu(menuHandler::ClockMenu);
         }
     };
     screen->showOverlayBanner(bannerOptions);
 }
 void menuHandler::messageResponseMenu()
 {
-    enum optionsNumbers { Back = 0, ViewMode, DeleteMenu, ReplyMenu, MuteChannel, Aloud, enumEnd };
+    enum optionsNumbers { Back = 0, ViewMode, DeleteMenu, ReplyMenu, MuteChannel, Aloud, Shutdown, enumEnd };
 
     static const char *optionsArray[enumEnd];
     static int optionsEnumArray[enumEnd];
@@ -553,6 +569,8 @@ void menuHandler::messageResponseMenu()
     optionsArray[options] = "Read Aloud";
     optionsEnumArray[options++] = Aloud;
 #endif
+    optionsArray[options] = "Shutdown";
+    optionsEnumArray[options++] = Shutdown;
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Message Action";
@@ -598,6 +616,8 @@ void menuHandler::messageResponseMenu()
             const char *msg = reinterpret_cast<const char *>(mp.decoded.payload.bytes);
             audioThread->readAloud(msg);
 #endif
+        } else if (selected == Shutdown) {
+            menuHandler::queueShutdownMenu(menuHandler::MessageResponseMenu);
         }
     };
     screen->showOverlayBanner(bannerOptions);
@@ -921,7 +941,7 @@ void menuHandler::messageViewModeMenu()
 
 void menuHandler::homeBaseMenu()
 {
-    enum optionsNumbers { Back, Mute, Backlight, Position, Preset, Freetext, Sleep, enumEnd };
+    enum optionsNumbers { Back, Mute, Backlight, Position, Preset, Freetext, Sleep, Shutdown, enumEnd };
 
     static const char *optionsArray[enumEnd] = {"Back"};
     static int optionsEnumArray[enumEnd] = {Back};
@@ -949,6 +969,8 @@ void menuHandler::homeBaseMenu()
         optionsArray[options] = "Send Node Info";
     }
     optionsEnumArray[options++] = Position;
+    optionsArray[options] = "Shutdown";
+    optionsEnumArray[options++] = Shutdown;
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Home Action";
@@ -998,6 +1020,25 @@ void menuHandler::homeBaseMenu()
             cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
         } else if (selected == Freetext) {
             cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST);
+        } else if (selected == Shutdown) {
+            menuHandler::queueShutdownMenu(menuHandler::MenuNone);
+        }
+    };
+    screen->showOverlayBanner(bannerOptions);
+}
+
+void menuHandler::genericBaseMenu()
+{
+    enum optionsNumbers { Back, Shutdown };
+    static const char *optionsArray[] = {"Back", "Shutdown"};
+
+    BannerOverlayOptions bannerOptions;
+    bannerOptions.message = "Page Action";
+    bannerOptions.optionsArrayPtr = optionsArray;
+    bannerOptions.optionsCount = sizeof(optionsArray) / sizeof(optionsArray[0]);
+    bannerOptions.bannerCallback = [](int selected) -> void {
+        if (selected == Shutdown) {
+            menuHandler::queueShutdownMenu(menuHandler::MenuNone);
         }
     };
     screen->showOverlayBanner(bannerOptions);
@@ -1010,7 +1051,7 @@ void menuHandler::textMessageMenu()
 
 void menuHandler::textMessageBaseMenu()
 {
-    enum optionsNumbers { Back, Preset, Freetext, enumEnd };
+    enum optionsNumbers { Back, Preset, Freetext, Shutdown, enumEnd };
 
     static const char *optionsArray[enumEnd] = {"Back"};
     static int optionsEnumArray[enumEnd] = {Back};
@@ -1021,6 +1062,8 @@ void menuHandler::textMessageBaseMenu()
         optionsArray[options] = "New Freetext Msg";
         optionsEnumArray[options++] = Freetext;
     }
+    optionsArray[options] = "Shutdown";
+    optionsEnumArray[options++] = Shutdown;
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Message Action";
@@ -1032,6 +1075,8 @@ void menuHandler::textMessageBaseMenu()
             cannedMessageModule->LaunchWithDestination(NODENUM_BROADCAST);
         } else if (selected == Freetext) {
             cannedMessageModule->LaunchFreetextWithDestination(NODENUM_BROADCAST);
+        } else if (selected == Shutdown) {
+            menuHandler::queueShutdownMenu(menuHandler::MenuNone);
         }
     };
     screen->showOverlayBanner(bannerOptions);
@@ -1039,7 +1084,7 @@ void menuHandler::textMessageBaseMenu()
 
 void menuHandler::systemBaseMenu()
 {
-    enum optionsNumbers { Back, Notifications, ScreenOptions, Bluetooth, WiFiToggle, PowerMenu, Test, enumEnd };
+    enum optionsNumbers { Back, Notifications, ScreenOptions, Bluetooth, WiFiToggle, PowerMenu, Test, Shutdown, enumEnd };
     static const char *optionsArray[enumEnd] = {"Back"};
     static int optionsEnumArray[enumEnd] = {Back};
     int options = 1;
@@ -1072,6 +1117,8 @@ void menuHandler::systemBaseMenu()
         optionsArray[options] = "Test Menu";
         optionsEnumArray[options++] = Test;
     }
+    optionsArray[options] = "Shutdown";
+    optionsEnumArray[options++] = Shutdown;
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "System Action";
@@ -1102,6 +1149,8 @@ void menuHandler::systemBaseMenu()
             menuQueue = WifiToggleMenu;
             screen->runNow();
 #endif
+        } else if (selected == Shutdown) {
+            menuHandler::queueShutdownMenu(menuHandler::SystemBaseMenu);
         } else if (selected == Back && !test_enabled) {
             test_count++;
             if (test_count > 4) {
@@ -1114,7 +1163,7 @@ void menuHandler::systemBaseMenu()
 
 void menuHandler::favoriteBaseMenu()
 {
-    enum optionsNumbers { Back, Preset, Freetext, GoToChat, Remove, TraceRoute, enumEnd };
+    enum optionsNumbers { Back, Preset, Freetext, GoToChat, Remove, TraceRoute, Shutdown, enumEnd };
 
     static const char *optionsArray[enumEnd] = {"Back"};
     static int optionsEnumArray[enumEnd] = {Back};
@@ -1151,6 +1200,8 @@ void menuHandler::favoriteBaseMenu()
     }
     optionsArray[options] = "Remove Favorite";
     optionsEnumArray[options++] = Remove;
+    optionsArray[options] = "Shutdown";
+    optionsEnumArray[options++] = Shutdown;
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Favorites Action";
@@ -1183,6 +1234,8 @@ void menuHandler::favoriteBaseMenu()
             if (traceRouteModule) {
                 traceRouteModule->launch(graphics::UIRenderer::currentFavoriteNodeNum);
             }
+        } else if (selected == Shutdown) {
+            menuHandler::queueShutdownMenu(menuHandler::MenuNone);
         }
     };
     screen->showOverlayBanner(bannerOptions);
@@ -1197,7 +1250,8 @@ void menuHandler::positionBaseMenu()
         CompassCalibrate,
         GPSSmartPosition,
         GPSUpdateInterval,
-        GPSPositionBroadcast
+        GPSPositionBroadcast,
+        Shutdown
     };
 
     static const PositionMenuOption baseOptions[] = {
@@ -1208,6 +1262,7 @@ void menuHandler::positionBaseMenu()
         {"Update Interval", OptionsAction::Select, static_cast<int>(PositionAction::GPSUpdateInterval)},
         {"Broadcast Interval", OptionsAction::Select, static_cast<int>(PositionAction::GPSPositionBroadcast)},
         {"Compass", OptionsAction::Select, static_cast<int>(PositionAction::CompassMenu)},
+        {"Shutdown", OptionsAction::Select, static_cast<int>(PositionAction::Shutdown)},
     };
 
     static const PositionMenuOption calibrateOptions[] = {
@@ -1219,6 +1274,7 @@ void menuHandler::positionBaseMenu()
         {"Broadcast Interval", OptionsAction::Select, static_cast<int>(PositionAction::GPSPositionBroadcast)},
         {"Compass", OptionsAction::Select, static_cast<int>(PositionAction::CompassMenu)},
         {"Compass Calibrate", OptionsAction::Select, static_cast<int>(PositionAction::CompassCalibrate)},
+        {"Shutdown", OptionsAction::Select, static_cast<int>(PositionAction::Shutdown)},
     };
 
     constexpr size_t baseCount = sizeof(baseOptions) / sizeof(baseOptions[0]);
@@ -1266,6 +1322,9 @@ void menuHandler::positionBaseMenu()
             menuQueue = GpsPositionBroadcastMenu;
             screen->runNow();
             break;
+        case PositionAction::Shutdown:
+            menuHandler::queueShutdownMenu(menuHandler::PositionBaseMenu);
+            break;
         }
     };
 
@@ -1281,7 +1340,7 @@ void menuHandler::positionBaseMenu()
 
 void menuHandler::nodeListMenu()
 {
-    enum optionsNumbers { Back, NodePicker, TraceRoute, Verify, Reset, NodeNameLength, enumEnd };
+    enum optionsNumbers { Back, NodePicker, TraceRoute, Verify, Reset, NodeNameLength, Shutdown, enumEnd };
     static const char *optionsArray[enumEnd] = {"Back"};
     static int optionsEnumArray[enumEnd] = {Back};
     int options = 1;
@@ -1295,6 +1354,8 @@ void menuHandler::nodeListMenu()
     }
     optionsArray[options] = "Reset NodeDB";
     optionsEnumArray[options++] = Reset;
+    optionsArray[options] = "Shutdown";
+    optionsEnumArray[options++] = Shutdown;
 
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "Node Action";
@@ -1311,6 +1372,8 @@ void menuHandler::nodeListMenu()
         } else if (selected == NodeNameLength) {
             menuHandler::menuQueue = menuHandler::NodeNameLengthMenu;
             screen->runNow();
+        } else if (selected == Shutdown) {
+            menuHandler::queueShutdownMenu(menuHandler::NodeBaseMenu);
         }
     };
     screen->showOverlayBanner(bannerOptions);
@@ -2161,7 +2224,7 @@ void menuHandler::shutdownMenu()
             InputEvent event = {.inputEvent = (input_broker_event)INPUT_BROKER_SHUTDOWN, .kbchar = 0, .touchX = 0, .touchY = 0};
             inputBroker->injectInputEvent(&event);
         } else {
-            menuQueue = PowerMenu;
+            menuQueue = shutdownBackMenu;
             screen->runNow();
         }
     };
@@ -2244,17 +2307,19 @@ void menuHandler::numberTest()
 
 void menuHandler::wifiBaseMenu()
 {
-    enum optionsNumbers { Back, Wifi_toggle };
+    enum optionsNumbers { Back, Wifi_toggle, Shutdown };
 
-    static const char *optionsArray[] = {"Back", "WiFi Toggle"};
+    static const char *optionsArray[] = {"Back", "WiFi Toggle", "Shutdown"};
     BannerOverlayOptions bannerOptions;
     bannerOptions.message = "WiFi Menu";
     bannerOptions.optionsArrayPtr = optionsArray;
-    bannerOptions.optionsCount = 2;
+    bannerOptions.optionsCount = sizeof(optionsArray) / sizeof(optionsArray[0]);
     bannerOptions.bannerCallback = [](int selected) -> void {
         if (selected == Wifi_toggle) {
             menuQueue = WifiToggleMenu;
             screen->runNow();
+        } else if (selected == Shutdown) {
+            menuHandler::queueShutdownMenu(menuHandler::MenuNone);
         }
     };
     screen->showOverlayBanner(bannerOptions);
@@ -2389,8 +2454,7 @@ void menuHandler::powerMenu()
             menuHandler::menuQueue = menuHandler::RebootMenu;
             screen->runNow();
         } else if (selected == Shutdown) {
-            menuHandler::menuQueue = menuHandler::ShutdownMenu;
-            screen->runNow();
+            menuHandler::queueShutdownMenu(menuHandler::PowerMenu);
         } else if (selected == MUI) {
             menuHandler::menuQueue = menuHandler::MuiPicker;
             screen->runNow();

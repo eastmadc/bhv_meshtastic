@@ -230,6 +230,7 @@ int HeartbeatPixelThread::handleDeepSleep(void *unused)
     (void)unused;
     if (initialized) {
         clearStrips();
+        delay(1); // Let the final all-off NeoPixel frame latch before cutting strip power.
     }
     powerStrips(false);
     return 0;

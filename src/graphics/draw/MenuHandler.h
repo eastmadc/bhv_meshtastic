@@ -77,6 +77,7 @@ class menuHandler
     static void replyMenu();
     static void deleteMessagesMenu();
     static void homeBaseMenu();
+    static void genericBaseMenu();
     static void textMessageBaseMenu();
     static void systemBaseMenu();
     static void favoriteBaseMenu();
@@ -114,9 +115,11 @@ class menuHandler
 
   private:
     static void saveUIConfig();
+    static void queueShutdownMenu(screenMenus backMenu);
     static void keyVerificationInitMenu();
     static void keyVerificationFinalPrompt();
     static void bluetoothToggleMenu();
+    static screenMenus shutdownBackMenu;
 };
 
 /* Generic Menu Options designations  */

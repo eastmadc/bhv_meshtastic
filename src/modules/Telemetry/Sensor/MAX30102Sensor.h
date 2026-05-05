@@ -196,6 +196,7 @@ class MAX30102Sensor : public TelemetrySensor
     virtual bool canSleep() override;
     virtual bool getMetrics(meshtastic_Telemetry *measurement) override;
     void setStayAwake(bool stayAwake);
+    void prepareDeepSleep();
     bool serviceSensor();
     bool getRawWaveformSnapshot(uint32_t *irOut, uint32_t *redOut, uint16_t capacity, uint16_t *countOut);
     /** True when finger is detected and sensor is in active HR mode (for UI auto-navigate). */
