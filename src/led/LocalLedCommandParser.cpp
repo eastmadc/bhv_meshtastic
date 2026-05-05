@@ -21,8 +21,9 @@ static const NamedColor kNamedColors[] = {
 };
 
 static const char *kHelpText =
-    "#! set node led <c1> [c2]\n#! get node [led|idle_bpm|idle_delay]\n#! set node idle_bpm <n>\n#! set node idle_delay <ms>\n#! "
-    "set ch [n] led <c1> [c2]\n#! get ch [n] [led]\n#! clear ch [n] led\n#! help colors";
+    "#! set node led <c1> [c2]\n#! get node [led|idle_bpm|idle_delay|notify_pulses]\n#! set node idle_bpm <n>\n#! set node "
+    "idle_delay <ms>\n#! set node notify_pulses <n>\n#! set ch [n] led <c1> [c2]\n#! set ch [n] notify_pulses <n|0>\n#! "
+    "get ch [n] [led|notify_pulses]\n#! clear ch [n] led\n#! clear ch [n] notify_pulses\n#! help colors";
 static const char *kColorsText =
     "colors: red orange yellow green blue indigo violet purple pink white warmwhite cyan magenta teal lime amber gold off or "
     "#RRGGBB";
@@ -179,8 +180,8 @@ void handleNodeGet(const CustomLedConfig &config, uint8_t argc, char *argv[], Lo
     formatColor(led2, sizeof(led2), config.node_led2_color);
 
     if (argc == 0) {
-        setResponse(result, false, "node led led1=%s led2=%s idle_bpm=%u idle_delay=%lu", led1, led2, config.idle_bpm,
-                    (unsigned long)config.idle_delay_ms);
+        setResponse(result, false, "node led led1=%s led2=%s idle_bpm=%u idle_delay=%lu notify_pulses=%u", led1, led2,
+                    config.idle_bpm, (unsigned long)config.idle_delay_ms, config.notification_pulses);
         return;
     }
     if (argc != 1) {
@@ -197,6 +198,10 @@ void handleNodeGet(const CustomLedConfig &config, uint8_t argc, char *argv[], Lo
     }
     if (strcasecmp(argv[0], "idle_delay") == 0) {
         setResponse(result, false, "node idle_delay=%lu", (unsigned long)config.idle_delay_ms);
+        return;
+    }
+    if (strcasecmp(argv[0], "notify_pulses") == 0) {
+        setResponse(result, false, "node notify_pulses=%u", config.notification_pulses);
         return;
     }
     setUnknown(result);
@@ -265,6 +270,21 @@ void handleNodeSet(CustomLedConfig &config, uint8_t argc, char *argv[], LocalLed
         return;
     }
 
+    if (strcasecmp(argv[0], "notify_pulses") == 0) {
+        uint32_t value = 0;
+        if (argc == 1) {
+            setResponse(result, false, "ERR missing value");
+            return;
+        }
+        if (argc != 2 || !parseUnsigned(argv[1], &value) || value < 1 || value > kLocalLedMaxNotificationPulses) {
+            setResponse(result, false, "ERR invalid notify_pulses");
+            return;
+        }
+        config.notification_pulses = (uint8_t)value;
+        setResponse(result, true, "OK node notify_pulses=%u", config.notification_pulses);
+        return;
+    }
+
     setUnknown(result);
 }
 
@@ -273,6 +293,9 @@ void formatChannelResponse(const CustomLedConfig &config, uint8_t channel, Local
     uint32_t led1 = config.node_led1_color;
     uint32_t led2 = config.node_led2_color;
     bool configured = config.channels[channel].configured;
+    uint8_t notifyPulses = config.channels[channel].notification_pulses > 0 ? config.channels[channel].notification_pulses
+                                                                            : config.notification_pulses;
+    bool notifyOverride = config.channels[channel].notification_pulses > 0;
     if (configured) {
         led1 = config.channels[channel].led1_color;
         led2 = config.channels[channel].led2_color;
@@ -282,8 +305,8 @@ void formatChannelResponse(const CustomLedConfig &config, uint8_t channel, Local
     char led2Text[8] = {};
     formatColor(led1Text, sizeof(led1Text), led1);
     formatColor(led2Text, sizeof(led2Text), led2);
-    setResponse(result, false, "ch=%u led led1=%s led2=%s configured=%s", channel, led1Text, led2Text,
-                configured ? "true" : "false");
+    setResponse(result, false, "ch=%u led led1=%s led2=%s configured=%s notify_pulses=%u notify_override=%s", channel, led1Text,
+                led2Text, configured ? "true" : "false", notifyPulses, notifyOverride ? "true" : "false");
 }
 
 void handleChannelGet(const CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
@@ -311,6 +334,13 @@ void handleChannelGet(const CustomLedConfig &config, const LocalLedCommandContex
         formatChannelResponse(config, targetChannel, result);
         return;
     }
+    if (argc == index + 1 && strcasecmp(argv[index], "notify_pulses") == 0) {
+        uint8_t notifyPulses = config.channels[targetChannel].notification_pulses > 0 ? config.channels[targetChannel].notification_pulses
+                                                                                      : config.notification_pulses;
+        setResponse(result, false, "ch=%u notify_pulses=%u override=%s", targetChannel, notifyPulses,
+                    config.channels[targetChannel].notification_pulses > 0 ? "true" : "false");
+        return;
+    }
     setUnknown(result);
 }
 
@@ -331,7 +361,29 @@ void handleChannelSet(CustomLedConfig &config, const LocalLedCommandContext &con
         return;
     }
 
-    if (argc <= index || strcasecmp(argv[index], "led") != 0) {
+    if (argc <= index) {
+        setUnknown(result);
+        return;
+    }
+    if (strcasecmp(argv[index], "notify_pulses") == 0) {
+        uint32_t value = 0;
+        if (argc == index + 1) {
+            setResponse(result, false, "ERR missing value");
+            return;
+        }
+        if (argc != index + 2 || !parseUnsigned(argv[index + 1], &value) || value > kLocalLedMaxNotificationPulses) {
+            setResponse(result, false, "ERR invalid notify_pulses");
+            return;
+        }
+        config.channels[targetChannel].notification_pulses = (uint8_t)value;
+        if (value == 0) {
+            setResponse(result, true, "OK ch=%u notify_pulses default", targetChannel);
+        } else {
+            setResponse(result, true, "OK ch=%u notify_pulses=%u", targetChannel, config.channels[targetChannel].notification_pulses);
+        }
+        return;
+    }
+    if (strcasecmp(argv[index], "led") != 0) {
         setUnknown(result);
         return;
     }
@@ -379,7 +431,17 @@ void handleChannelClear(CustomLedConfig &config, const LocalLedCommandContext &c
         return;
     }
 
-    if (argc != index + 1 || strcasecmp(argv[index], "led") != 0) {
+    if (argc != index + 1) {
+        setUnknown(result);
+        return;
+    }
+
+    if (strcasecmp(argv[index], "notify_pulses") == 0) {
+        config.channels[targetChannel].notification_pulses = 0;
+        setResponse(result, true, "OK ch=%u notify_pulses default", targetChannel);
+        return;
+    }
+    if (strcasecmp(argv[index], "led") != 0) {
         setUnknown(result);
         return;
     }

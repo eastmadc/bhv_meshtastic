@@ -6,9 +6,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+static constexpr uint8_t kLocalLedDefaultNotificationPulses = 3;
+static constexpr uint8_t kLocalLedMaxNotificationPulses = 20;
+
 struct ChannelLedConfig {
     uint32_t led1_color;
     uint32_t led2_color;
+    uint8_t notification_pulses;
     bool configured;
 };
 
@@ -17,6 +21,7 @@ struct CustomLedConfig {
     uint32_t node_led2_color;
     uint16_t idle_bpm;
     uint32_t idle_delay_ms;
+    uint8_t notification_pulses;
     ChannelLedConfig channels[8];
 };
 
@@ -40,6 +45,7 @@ struct LocalLedEffectiveConfig {
     uint32_t led2_color;
     uint16_t idle_bpm;
     uint32_t idle_delay_ms;
+    uint8_t notification_pulses;
     bool configured;
     uint8_t channel_index;
 };

@@ -18,8 +18,9 @@ namespace
 {
 static constexpr const char *kFileName = "/prefs/custom_led.bin";
 static constexpr uint32_t kMagic = 0x434C4544;
-static constexpr uint16_t kVersion = 4;
-static constexpr size_t kSerializedSize = 94;
+static constexpr uint16_t kVersion = 5;
+static constexpr size_t kLegacySerializedSize = 94;
+static constexpr size_t kSerializedSize = 103;
 static constexpr uint32_t kLocalReplyDelayMs = 500;
 
 class LocalLedReplyDispatcher : private concurrency::OSThread
@@ -207,9 +208,11 @@ void LocalLedConfigStore::applyDefaults(CustomLedConfig *defaults)
     defaults->node_led2_color = 0xFF0000;
     defaults->idle_bpm = 80;
     defaults->idle_delay_ms = 0;
+    defaults->notification_pulses = kLocalLedDefaultNotificationPulses;
     for (size_t i = 0; i < 8; ++i) {
         defaults->channels[i].led1_color = 0;
         defaults->channels[i].led2_color = 0;
+        defaults->channels[i].notification_pulses = 0;
         defaults->channels[i].configured = false;
     }
 }
@@ -228,9 +231,11 @@ bool LocalLedConfigStore::serializeConfig(const CustomLedConfig &source, uint8_t
     writeUint32(buffer, offset, source.node_led2_color);
     writeUint16(buffer, offset, source.idle_bpm);
     writeUint32(buffer, offset, source.idle_delay_ms);
+    buffer[offset++] = source.notification_pulses;
     for (size_t i = 0; i < 8; ++i) {
         writeUint32(buffer, offset, source.channels[i].led1_color);
         writeUint32(buffer, offset, source.channels[i].led2_color);
+        buffer[offset++] = source.channels[i].notification_pulses;
         buffer[offset++] = source.channels[i].configured ? 1 : 0;
     }
 
@@ -242,7 +247,7 @@ bool LocalLedConfigStore::serializeConfig(const CustomLedConfig &source, uint8_t
 
 bool LocalLedConfigStore::deserializeConfig(const uint8_t *buffer, size_t length, CustomLedConfig *destination)
 {
-    if (!buffer || !destination || length < kSerializedSize) {
+    if (!buffer || !destination || length < kLegacySerializedSize) {
         return false;
     }
 
@@ -254,26 +259,46 @@ bool LocalLedConfigStore::deserializeConfig(const uint8_t *buffer, size_t length
         !readUint16(buffer, length, offset, &channelCount)) {
         return false;
     }
-    if (magic != kMagic || channelCount != 8 || (version < 1 || version > kVersion)) {
+    if (magic != kMagic || channelCount != 8 || (version < 1 || version > kVersion) ||
+        (version >= 5 && length < kSerializedSize)) {
         return false;
     }
 
     CustomLedConfig decoded = {};
+    applyDefaults(&decoded);
     if (!readUint32(buffer, length, offset, &decoded.node_led1_color) ||
         !readUint32(buffer, length, offset, &decoded.node_led2_color) || !readUint16(buffer, length, offset, &decoded.idle_bpm) ||
         !readUint32(buffer, length, offset, &decoded.idle_delay_ms)) {
         return false;
+    }
+    if (version >= 5) {
+        if (offset >= length) {
+            return false;
+        }
+        decoded.notification_pulses = buffer[offset++];
     }
     for (size_t i = 0; i < 8; ++i) {
         if (!readUint32(buffer, length, offset, &decoded.channels[i].led1_color) ||
             !readUint32(buffer, length, offset, &decoded.channels[i].led2_color) || offset >= length) {
             return false;
         }
+        if (version >= 5) {
+            decoded.channels[i].notification_pulses = buffer[offset++];
+            if (offset >= length) {
+                return false;
+            }
+        }
         decoded.channels[i].configured = buffer[offset++] != 0;
     }
 
-    if (decoded.idle_bpm < 1 || decoded.idle_bpm > 600 || decoded.idle_delay_ms > 600000) {
+    if (decoded.idle_bpm < 1 || decoded.idle_bpm > 600 || decoded.idle_delay_ms > 600000 ||
+        decoded.notification_pulses < 1 || decoded.notification_pulses > kLocalLedMaxNotificationPulses) {
         return false;
+    }
+    for (size_t i = 0; i < 8; ++i) {
+        if (decoded.channels[i].notification_pulses > kLocalLedMaxNotificationPulses) {
+            return false;
+        }
     }
 
     if (version == 1 && isLegacyWhiteDefaultConfig(decoded)) {
@@ -433,12 +458,16 @@ LocalLedEffectiveConfig LocalLedConfigStore::getEffectiveConfigForChannel(uint8_
         snapshot.node_led2_color,
         snapshot.idle_bpm,
         snapshot.idle_delay_ms,
+        snapshot.notification_pulses,
         false,
         resolvedChannel,
     };
     if (snapshot.channels[resolvedChannel].configured) {
         effective.led1_color = snapshot.channels[resolvedChannel].led1_color;
         effective.led2_color = snapshot.channels[resolvedChannel].led2_color;
+        if (snapshot.channels[resolvedChannel].notification_pulses > 0) {
+            effective.notification_pulses = snapshot.channels[resolvedChannel].notification_pulses;
+        }
         effective.configured = true;
     }
     return effective;
@@ -556,10 +585,6 @@ bool handleLocalLedPhoneCommand(const meshtastic_MeshPacket &packet, meshtastic_
         packet.id,
         resolvedChannel,
     };
-    if (context.has_resolved_incoming_channel) {
-        localLedConfigStore->setActiveChannel(context.resolved_incoming_channel);
-    }
-
     LocalLedCommandResult result = {};
     if (!localLedConfigStore->handleCommand(text, context, &result)) {
         return false;

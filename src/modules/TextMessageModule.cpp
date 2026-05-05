@@ -10,6 +10,9 @@
 #include "graphics/draw/MessageRenderer.h"
 #include "led/LocalLedConfig.h"
 #include "main.h"
+#ifdef HAS_HEARTBEAT_NEOPIXELS
+#include "HeartbeatPixelThread.h"
+#endif
 TextMessageModule *textMessageModule;
 
 ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp)
@@ -24,7 +27,11 @@ ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp
 
     uint8_t resolvedChannel = 0;
     if (localLedConfigStore && localLedResolveIncomingChannel(mp, &resolvedChannel)) {
-        localLedConfigStore->setActiveChannel(resolvedChannel);
+#ifdef HAS_HEARTBEAT_NEOPIXELS
+        if (heartbeatPixelThread && !isFromUs(&mp)) {
+            heartbeatPixelThread->enqueueChannelNotification(resolvedChannel);
+        }
+#endif
     }
 
     // We only store/display messages destined for us.

@@ -196,13 +196,6 @@ void MeshService::handleToRadio(meshtastic_MeshPacket &p)
 
     p.rx_time = getValidTime(RTCQualityFromNet); // Record the time the packet arrived from the phone
 
-    if (localLedConfigStore && p.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP) {
-        uint8_t activeChannel = 0;
-        if (localLedResolveIncomingChannel(p, &activeChannel)) {
-            localLedConfigStore->setActiveChannel(activeChannel);
-        }
-    }
-
     meshtastic_MeshPacket *replyPacket = nullptr;
     if (handleLocalLedPhoneCommand(p, &replyPacket)) {
         if (replyPacket) {
