@@ -21,9 +21,31 @@ static const NamedColor kNamedColors[] = {
 };
 
 static const char *kHelpText =
-    "#! set node led <c1> [c2]\n#! get node [led|idle_bpm|idle_delay|notify_pulses]\n#! set node idle_bpm <n>\n#! set node "
-    "idle_delay <ms>\n#! set node notify_pulses <n>\n#! set ch [n] led <c1> [c2]\n#! set ch [n] notify_pulses <n|0>\n#! "
-    "get ch [n] [led|notify_pulses]\n#! clear ch [n] led\n#! clear ch [n] notify_pulses\n#! help colors";
+    "help: #! get node|ch|dm [field]; #! set node|ch|dm <field> <value>; #! clear ch|dm <field>. Try: #! help dm, "
+    "#! help colors";
+static const char *kNodeHelpText =
+    "node: get [color|idle_bpm|idle_delay|notify_pulses|send_pulses]; set color <c1> [c2]; set idle_bpm <1-600>; "
+    "set idle_delay <0-600000>; set notify_pulses <1-20>; set send_pulses <1-20>";
+static const char *kChannelHelpText =
+    "ch: get [n] [color|notify_pulses|send_pulses]; set [n] color <c1> [c2]; set [n] notify_pulses|send_pulses "
+    "<0-20>; clear [n] color|notify_pulses|send_pulses";
+static const char *kDirectMessageHelpText =
+    "dm: get [color|notify_pulses|send_pulses]; set color <c1> [c2]; set notify_pulses|send_pulses <0-20>; list dm; "
+    "clear color|notify_pulses|send_pulses|all|<slot>";
+static const char *kGetHelpText =
+    "get: #! get node [color|idle_bpm|idle_delay|notify_pulses|send_pulses]; #! get ch [n] "
+    "[color|notify_pulses|send_pulses]; #! get dm [color|notify_pulses|send_pulses]";
+static const char *kSetHelpText =
+    "set: node color|idle_bpm|idle_delay|notify_pulses|send_pulses; ch [n] color|notify_pulses|send_pulses; dm "
+    "color|notify_pulses|send_pulses";
+static const char *kClearHelpText =
+    "clear: #! clear ch [n] color|notify_pulses|send_pulses; #! clear dm color|notify_pulses|send_pulses|all|<slot>";
+static const char *kColorHelpText =
+    "color: set node color <c1> [c2]; set ch [n] color <c1> [c2]; set dm color <c1> [c2]. led is accepted as an alias";
+static const char *kNotifyPulsesHelpText =
+    "notify_pulses: node <1-20>; ch [n] <0-20>; dm <0-20>. 0 uses node default for ch/dm";
+static const char *kSendPulsesHelpText =
+    "send_pulses: node <1-20>; ch [n] <0-20>; dm <0-20>. 0 uses node default for ch/dm";
 static const char *kColorsText =
     "colors: red orange yellow green blue indigo violet purple pink white warmwhite cyan magenta teal lime amber gold off or "
     "#RRGGBB";
@@ -46,7 +68,119 @@ void setResponse(LocalLedCommandResult *result, bool persist, const char *format
 
 void setUnknown(LocalLedCommandResult *result)
 {
-    setResponse(result, false, "ERR unknown command");
+    setResponse(result, false, "ERR unknown command; try #! help");
+}
+
+bool isHelpToken(const char *text)
+{
+    return text && (strcasecmp(text, "help") == 0 || strcmp(text, "?") == 0);
+}
+
+bool isColorField(const char *text)
+{
+    return text && (strcasecmp(text, "color") == 0 || strcasecmp(text, "led") == 0);
+}
+
+bool isContextualScopedField(const char *text)
+{
+    return isColorField(text) || strcasecmp(text, "notify_pulses") == 0 || strcasecmp(text, "send_pulses") == 0;
+}
+
+void handleChannelGet(const CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
+                      LocalLedCommandResult *result);
+void handleChannelSet(CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
+                      LocalLedCommandResult *result);
+void handleChannelClear(CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
+                        LocalLedCommandResult *result);
+void handleDirectMessageGet(const CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
+                            LocalLedCommandResult *result);
+void handleDirectMessageSet(CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
+                            LocalLedCommandResult *result);
+void handleDirectMessageClear(CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
+                              LocalLedCommandResult *result);
+
+bool setHelpForTopic(const char *topic, LocalLedCommandResult *result)
+{
+    if (!topic || strcasecmp(topic, "all") == 0) {
+        setResponse(result, false, "%s", kHelpText);
+        return true;
+    }
+    if (strcasecmp(topic, "node") == 0) {
+        setResponse(result, false, "%s", kNodeHelpText);
+        return true;
+    }
+    if (strcasecmp(topic, "ch") == 0 || strcasecmp(topic, "channel") == 0) {
+        setResponse(result, false, "%s", kChannelHelpText);
+        return true;
+    }
+    if (strcasecmp(topic, "dm") == 0 || strcasecmp(topic, "direct") == 0) {
+        setResponse(result, false, "%s", kDirectMessageHelpText);
+        return true;
+    }
+    if (strcasecmp(topic, "get") == 0) {
+        setResponse(result, false, "%s", kGetHelpText);
+        return true;
+    }
+    if (strcasecmp(topic, "set") == 0) {
+        setResponse(result, false, "%s", kSetHelpText);
+        return true;
+    }
+    if (strcasecmp(topic, "clear") == 0) {
+        setResponse(result, false, "%s", kClearHelpText);
+        return true;
+    }
+    if (strcasecmp(topic, "list") == 0) {
+        setResponse(result, false, "list: #! list dm");
+        return true;
+    }
+    if (strcasecmp(topic, "colors") == 0 || strcasecmp(topic, "color") == 0) {
+        setResponse(result, false, "%s", kColorsText);
+        return true;
+    }
+    if (strcasecmp(topic, "color") == 0 || strcasecmp(topic, "led") == 0) {
+        setResponse(result, false, "%s", kColorHelpText);
+        return true;
+    }
+    if (strcasecmp(topic, "notify_pulses") == 0 || strcasecmp(topic, "pulses") == 0) {
+        setResponse(result, false, "%s", kNotifyPulsesHelpText);
+        return true;
+    }
+    if (strcasecmp(topic, "send_pulses") == 0) {
+        setResponse(result, false, "%s", kSendPulsesHelpText);
+        return true;
+    }
+    return false;
+}
+
+bool handleContextualScopedCommand(CustomLedConfig &config, const LocalLedCommandContext &context, const char *verb, uint8_t argc,
+                                   char *argv[], LocalLedCommandResult *result)
+{
+    if (argc == 0 || !isContextualScopedField(argv[0])) {
+        return false;
+    }
+    if (strcasecmp(verb, "get") != 0 && strcasecmp(verb, "set") != 0 && strcasecmp(verb, "clear") != 0) {
+        return false;
+    }
+
+    if (context.has_direct_message_peer) {
+        if (strcasecmp(verb, "get") == 0) {
+            handleDirectMessageGet(config, context, argc, argv, result);
+        } else if (strcasecmp(verb, "set") == 0) {
+            handleDirectMessageSet(config, context, argc, argv, result);
+        } else {
+            handleDirectMessageClear(config, context, argc, argv, result);
+        }
+        return true;
+    }
+
+    if (strcasecmp(verb, "get") == 0) {
+        handleChannelGet(config, context, argc, argv, result);
+    } else if (strcasecmp(verb, "set") == 0) {
+        handleChannelSet(config, context, argc, argv, result);
+    } else {
+        handleChannelClear(config, context, argc, argv, result);
+    }
+    return true;
 }
 
 void formatColor(char *buffer, size_t bufferSize, uint32_t color)
@@ -172,24 +306,109 @@ void assignColors(uint32_t *led1, uint32_t *led2, uint32_t first, bool hasSecond
     *led2 = hasSecond ? second : first;
 }
 
+int8_t findDirectMessageUserSlot(const CustomLedConfig &config, uint32_t nodeNum)
+{
+    if (nodeNum == 0) {
+        return -1;
+    }
+    for (uint8_t i = 0; i < kLocalLedDirectMessageUserCapacity; ++i) {
+        if (config.direct_message_nodes[i] == nodeNum) {
+            return (int8_t)i;
+        }
+    }
+    return -1;
+}
+
+int8_t findEmptyDirectMessageUserSlot(const CustomLedConfig &config)
+{
+    for (uint8_t i = 0; i < kLocalLedDirectMessageUserCapacity; ++i) {
+        if (config.direct_message_nodes[i] == 0) {
+            return (int8_t)i;
+        }
+    }
+    return -1;
+}
+
+void clearDirectMessageUserSlot(CustomLedConfig &config, uint8_t slot)
+{
+    if (slot >= kLocalLedDirectMessageUserCapacity) {
+        return;
+    }
+    config.direct_message_nodes[slot] = 0;
+    config.direct_message_users[slot].led1_color = 0;
+    config.direct_message_users[slot].led2_color = 0;
+    config.direct_message_users[slot].notification_pulses = 0;
+    config.direct_message_users[slot].send_pulses = 0;
+    config.direct_message_users[slot].configured = false;
+}
+
+void pruneDirectMessageUserSlot(CustomLedConfig &config, uint8_t slot)
+{
+    if (slot >= kLocalLedDirectMessageUserCapacity) {
+        return;
+    }
+    if (!config.direct_message_users[slot].configured && config.direct_message_users[slot].notification_pulses == 0 &&
+        config.direct_message_users[slot].send_pulses == 0) {
+        clearDirectMessageUserSlot(config, slot);
+    }
+}
+
+ChannelLedConfig *getDirectMessageCommandTarget(CustomLedConfig &config, const LocalLedCommandContext &context, bool allocate,
+                                                LocalLedCommandResult *result, bool *isUser, uint8_t *slotOut)
+{
+    if (isUser) {
+        *isUser = false;
+    }
+    if (slotOut) {
+        *slotOut = 0;
+    }
+    if (!context.has_direct_message_peer || context.direct_message_peer == 0) {
+        return &config.direct_message;
+    }
+
+    int8_t slot = findDirectMessageUserSlot(config, context.direct_message_peer);
+    if (slot < 0 && allocate) {
+        slot = findEmptyDirectMessageUserSlot(config);
+        if (slot >= 0) {
+            config.direct_message_nodes[slot] = context.direct_message_peer;
+        }
+    }
+    if (slot < 0) {
+        setResponse(result, false, allocate ? "ERR dm user table full" : "ERR dm user not configured");
+        return nullptr;
+    }
+    if (isUser) {
+        *isUser = true;
+    }
+    if (slotOut) {
+        *slotOut = (uint8_t)slot;
+    }
+    return &config.direct_message_users[slot];
+}
+
 void handleNodeGet(const CustomLedConfig &config, uint8_t argc, char *argv[], LocalLedCommandResult *result)
 {
+    if (argc == 1 && isHelpToken(argv[0])) {
+        setResponse(result, false, "%s", kGetHelpText);
+        return;
+    }
+
     char led1[8] = {};
     char led2[8] = {};
     formatColor(led1, sizeof(led1), config.node_led1_color);
     formatColor(led2, sizeof(led2), config.node_led2_color);
 
     if (argc == 0) {
-        setResponse(result, false, "node led led1=%s led2=%s idle_bpm=%u idle_delay=%lu notify_pulses=%u", led1, led2,
-                    config.idle_bpm, (unsigned long)config.idle_delay_ms, config.notification_pulses);
+        setResponse(result, false, "node color color1=%s color2=%s idle_bpm=%u idle_delay=%lu notify_pulses=%u send_pulses=%u", led1,
+                    led2, config.idle_bpm, (unsigned long)config.idle_delay_ms, config.notification_pulses, config.send_pulses);
         return;
     }
     if (argc != 1) {
         setUnknown(result);
         return;
     }
-    if (strcasecmp(argv[0], "led") == 0) {
-        setResponse(result, false, "node led led1=%s led2=%s", led1, led2);
+    if (isColorField(argv[0])) {
+        setResponse(result, false, "node color color1=%s color2=%s", led1, led2);
         return;
     }
     if (strcasecmp(argv[0], "idle_bpm") == 0) {
@@ -204,17 +423,29 @@ void handleNodeGet(const CustomLedConfig &config, uint8_t argc, char *argv[], Lo
         setResponse(result, false, "node notify_pulses=%u", config.notification_pulses);
         return;
     }
+    if (strcasecmp(argv[0], "send_pulses") == 0) {
+        setResponse(result, false, "node send_pulses=%u", config.send_pulses);
+        return;
+    }
     setUnknown(result);
 }
 
 void handleNodeSet(CustomLedConfig &config, uint8_t argc, char *argv[], LocalLedCommandResult *result)
 {
     if (argc == 0) {
-        setUnknown(result);
+        setResponse(result, false, "%s", kNodeHelpText);
+        return;
+    }
+    if (argc == 1 && isHelpToken(argv[0])) {
+        setResponse(result, false, "%s", kSetHelpText);
         return;
     }
 
-    if (strcasecmp(argv[0], "led") == 0) {
+    if (isColorField(argv[0])) {
+        if (argc == 2 && isHelpToken(argv[1])) {
+            setResponse(result, false, "%s", kColorHelpText);
+            return;
+        }
         if (argc == 1) {
             setResponse(result, false, "ERR missing value");
             return;
@@ -236,12 +467,16 @@ void handleNodeSet(CustomLedConfig &config, uint8_t argc, char *argv[], LocalLed
         char led2[8] = {};
         formatColor(led1, sizeof(led1), config.node_led1_color);
         formatColor(led2, sizeof(led2), config.node_led2_color);
-        setResponse(result, true, "OK node led led1=%s led2=%s", led1, led2);
+        setResponse(result, true, "OK node color color1=%s color2=%s", led1, led2);
         return;
     }
 
     if (strcasecmp(argv[0], "idle_bpm") == 0) {
         uint32_t value = 0;
+        if (argc == 2 && isHelpToken(argv[1])) {
+            setResponse(result, false, "idle_bpm: #! set node idle_bpm <1-600>");
+            return;
+        }
         if (argc == 1) {
             setResponse(result, false, "ERR missing value");
             return;
@@ -257,6 +492,10 @@ void handleNodeSet(CustomLedConfig &config, uint8_t argc, char *argv[], LocalLed
 
     if (strcasecmp(argv[0], "idle_delay") == 0) {
         uint32_t value = 0;
+        if (argc == 2 && isHelpToken(argv[1])) {
+            setResponse(result, false, "idle_delay: #! set node idle_delay <0-600000>");
+            return;
+        }
         if (argc == 1) {
             setResponse(result, false, "ERR missing value");
             return;
@@ -272,6 +511,10 @@ void handleNodeSet(CustomLedConfig &config, uint8_t argc, char *argv[], LocalLed
 
     if (strcasecmp(argv[0], "notify_pulses") == 0) {
         uint32_t value = 0;
+        if (argc == 2 && isHelpToken(argv[1])) {
+            setResponse(result, false, "%s", kNotifyPulsesHelpText);
+            return;
+        }
         if (argc == 1) {
             setResponse(result, false, "ERR missing value");
             return;
@@ -285,6 +528,25 @@ void handleNodeSet(CustomLedConfig &config, uint8_t argc, char *argv[], LocalLed
         return;
     }
 
+    if (strcasecmp(argv[0], "send_pulses") == 0) {
+        uint32_t value = 0;
+        if (argc == 2 && isHelpToken(argv[1])) {
+            setResponse(result, false, "%s", kSendPulsesHelpText);
+            return;
+        }
+        if (argc == 1) {
+            setResponse(result, false, "ERR missing value");
+            return;
+        }
+        if (argc != 2 || !parseUnsigned(argv[1], &value) || value < 1 || value > kLocalLedMaxNotificationPulses) {
+            setResponse(result, false, "ERR invalid send_pulses");
+            return;
+        }
+        config.send_pulses = (uint8_t)value;
+        setResponse(result, true, "OK node send_pulses=%u", config.send_pulses);
+        return;
+    }
+
     setUnknown(result);
 }
 
@@ -295,7 +557,9 @@ void formatChannelResponse(const CustomLedConfig &config, uint8_t channel, Local
     bool configured = config.channels[channel].configured;
     uint8_t notifyPulses = config.channels[channel].notification_pulses > 0 ? config.channels[channel].notification_pulses
                                                                             : config.notification_pulses;
+    uint8_t sendPulses = config.channels[channel].send_pulses > 0 ? config.channels[channel].send_pulses : config.send_pulses;
     bool notifyOverride = config.channels[channel].notification_pulses > 0;
+    bool sendOverride = config.channels[channel].send_pulses > 0;
     if (configured) {
         led1 = config.channels[channel].led1_color;
         led2 = config.channels[channel].led2_color;
@@ -305,13 +569,72 @@ void formatChannelResponse(const CustomLedConfig &config, uint8_t channel, Local
     char led2Text[8] = {};
     formatColor(led1Text, sizeof(led1Text), led1);
     formatColor(led2Text, sizeof(led2Text), led2);
-    setResponse(result, false, "ch=%u led led1=%s led2=%s configured=%s notify_pulses=%u notify_override=%s", channel, led1Text,
-                led2Text, configured ? "true" : "false", notifyPulses, notifyOverride ? "true" : "false");
+    setResponse(result, false,
+                "ch=%u color color1=%s color2=%s configured=%s notify_pulses=%u notify_override=%s send_pulses=%u "
+                "send_override=%s",
+                channel, led1Text, led2Text, configured ? "true" : "false", notifyPulses, notifyOverride ? "true" : "false",
+                sendPulses, sendOverride ? "true" : "false");
+}
+
+void formatDirectMessageResponse(const CustomLedConfig &config, const LocalLedCommandContext &context, LocalLedCommandResult *result)
+{
+    uint32_t led1 = config.node_led1_color;
+    uint32_t led2 = config.node_led2_color;
+    bool configured = config.direct_message.configured;
+    bool notifyOverride = config.direct_message.notification_pulses > 0;
+    bool userOverride = false;
+    int8_t slot = -1;
+    uint8_t notifyPulses = config.direct_message.notification_pulses > 0 ? config.direct_message.notification_pulses
+                                                                         : config.notification_pulses;
+    uint8_t sendPulses = config.direct_message.send_pulses > 0 ? config.direct_message.send_pulses : config.send_pulses;
+    const ChannelLedConfig *dmConfig = config.direct_message.configured ? &config.direct_message : nullptr;
+    if (context.has_direct_message_peer) {
+        slot = findDirectMessageUserSlot(config, context.direct_message_peer);
+        if (slot >= 0) {
+            userOverride = config.direct_message_users[slot].configured || config.direct_message_users[slot].notification_pulses > 0 ||
+                           config.direct_message_users[slot].send_pulses > 0;
+            if (config.direct_message_users[slot].configured) {
+                dmConfig = &config.direct_message_users[slot];
+                configured = true;
+            }
+            if (config.direct_message_users[slot].notification_pulses > 0) {
+                notifyPulses = config.direct_message_users[slot].notification_pulses;
+                notifyOverride = true;
+            }
+            if (config.direct_message_users[slot].send_pulses > 0) {
+                sendPulses = config.direct_message_users[slot].send_pulses;
+            }
+        }
+    }
+    if (dmConfig) {
+        led1 = dmConfig->led1_color;
+        led2 = dmConfig->led2_color;
+    }
+
+    char led1Text[8] = {};
+    char led2Text[8] = {};
+    formatColor(led1Text, sizeof(led1Text), led1);
+    formatColor(led2Text, sizeof(led2Text), led2);
+    if (context.has_direct_message_peer) {
+        setResponse(result, false,
+                    "dm user=!%08X slot=%d color1=%s color2=%s configured=%s pulses=%u send_pulses=%u user_override=%s",
+                    (unsigned int)context.direct_message_peer, slot, led1Text, led2Text, configured ? "true" : "false", notifyPulses,
+                    sendPulses, userOverride ? "true" : "false");
+        return;
+    }
+    setResponse(result, false,
+                "dm default color1=%s color2=%s configured=%s notify_pulses=%u notify_override=%s send_pulses=%u",
+                led1Text, led2Text, configured ? "true" : "false", notifyPulses, notifyOverride ? "true" : "false", sendPulses);
 }
 
 void handleChannelGet(const CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
                       LocalLedCommandResult *result)
 {
+    if (argc == 1 && isHelpToken(argv[0])) {
+        setResponse(result, false, "%s", kGetHelpText);
+        return;
+    }
+
     uint8_t index = 0;
     bool hasExplicitChannel = false;
     uint8_t explicitChannel = 0;
@@ -330,7 +653,11 @@ void handleChannelGet(const CustomLedConfig &config, const LocalLedCommandContex
         formatChannelResponse(config, targetChannel, result);
         return;
     }
-    if (argc == index + 1 && strcasecmp(argv[index], "led") == 0) {
+    if (argc == index + 1 && isHelpToken(argv[index])) {
+        setResponse(result, false, "%s", kGetHelpText);
+        return;
+    }
+    if (argc == index + 1 && isColorField(argv[index])) {
         formatChannelResponse(config, targetChannel, result);
         return;
     }
@@ -341,12 +668,24 @@ void handleChannelGet(const CustomLedConfig &config, const LocalLedCommandContex
                     config.channels[targetChannel].notification_pulses > 0 ? "true" : "false");
         return;
     }
+    if (argc == index + 1 && strcasecmp(argv[index], "send_pulses") == 0) {
+        uint8_t sendPulses = config.channels[targetChannel].send_pulses > 0 ? config.channels[targetChannel].send_pulses
+                                                                            : config.send_pulses;
+        setResponse(result, false, "ch=%u send_pulses=%u override=%s", targetChannel, sendPulses,
+                    config.channels[targetChannel].send_pulses > 0 ? "true" : "false");
+        return;
+    }
     setUnknown(result);
 }
 
 void handleChannelSet(CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
                       LocalLedCommandResult *result)
 {
+    if (argc == 1 && isHelpToken(argv[0])) {
+        setResponse(result, false, "%s", kSetHelpText);
+        return;
+    }
+
     uint8_t index = 0;
     bool hasExplicitChannel = false;
     uint8_t explicitChannel = 0;
@@ -362,11 +701,19 @@ void handleChannelSet(CustomLedConfig &config, const LocalLedCommandContext &con
     }
 
     if (argc <= index) {
-        setUnknown(result);
+        setResponse(result, false, "%s", kChannelHelpText);
+        return;
+    }
+    if (argc == index + 1 && isHelpToken(argv[index])) {
+        setResponse(result, false, "%s", kSetHelpText);
         return;
     }
     if (strcasecmp(argv[index], "notify_pulses") == 0) {
         uint32_t value = 0;
+        if (argc == index + 2 && isHelpToken(argv[index + 1])) {
+            setResponse(result, false, "%s", kNotifyPulsesHelpText);
+            return;
+        }
         if (argc == index + 1) {
             setResponse(result, false, "ERR missing value");
             return;
@@ -383,8 +730,34 @@ void handleChannelSet(CustomLedConfig &config, const LocalLedCommandContext &con
         }
         return;
     }
-    if (strcasecmp(argv[index], "led") != 0) {
+    if (strcasecmp(argv[index], "send_pulses") == 0) {
+        uint32_t value = 0;
+        if (argc == index + 2 && isHelpToken(argv[index + 1])) {
+            setResponse(result, false, "%s", kSendPulsesHelpText);
+            return;
+        }
+        if (argc == index + 1) {
+            setResponse(result, false, "ERR missing value");
+            return;
+        }
+        if (argc != index + 2 || !parseUnsigned(argv[index + 1], &value) || value > kLocalLedMaxNotificationPulses) {
+            setResponse(result, false, "ERR invalid send_pulses");
+            return;
+        }
+        config.channels[targetChannel].send_pulses = (uint8_t)value;
+        if (value == 0) {
+            setResponse(result, true, "OK ch=%u send_pulses default", targetChannel);
+        } else {
+            setResponse(result, true, "OK ch=%u send_pulses=%u", targetChannel, config.channels[targetChannel].send_pulses);
+        }
+        return;
+    }
+    if (!isColorField(argv[index])) {
         setUnknown(result);
+        return;
+    }
+    if (argc == index + 2 && isHelpToken(argv[index + 1])) {
+        setResponse(result, false, "%s", kColorHelpText);
         return;
     }
     if (argc == index + 1) {
@@ -411,12 +784,17 @@ void handleChannelSet(CustomLedConfig &config, const LocalLedCommandContext &con
     char led2[8] = {};
     formatColor(led1, sizeof(led1), config.channels[targetChannel].led1_color);
     formatColor(led2, sizeof(led2), config.channels[targetChannel].led2_color);
-    setResponse(result, true, "OK ch=%u led led1=%s led2=%s", targetChannel, led1, led2);
+    setResponse(result, true, "OK ch=%u color color1=%s color2=%s", targetChannel, led1, led2);
 }
 
 void handleChannelClear(CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
                         LocalLedCommandResult *result)
 {
+    if (argc == 1 && isHelpToken(argv[0])) {
+        setResponse(result, false, "%s", kClearHelpText);
+        return;
+    }
+
     uint8_t index = 0;
     bool hasExplicitChannel = false;
     uint8_t explicitChannel = 0;
@@ -432,7 +810,12 @@ void handleChannelClear(CustomLedConfig &config, const LocalLedCommandContext &c
     }
 
     if (argc != index + 1) {
-        setUnknown(result);
+        setResponse(result, false, "%s", kClearHelpText);
+        return;
+    }
+
+    if (isHelpToken(argv[index])) {
+        setResponse(result, false, "%s", kClearHelpText);
         return;
     }
 
@@ -441,7 +824,12 @@ void handleChannelClear(CustomLedConfig &config, const LocalLedCommandContext &c
         setResponse(result, true, "OK ch=%u notify_pulses default", targetChannel);
         return;
     }
-    if (strcasecmp(argv[index], "led") != 0) {
+    if (strcasecmp(argv[index], "send_pulses") == 0) {
+        config.channels[targetChannel].send_pulses = 0;
+        setResponse(result, true, "OK ch=%u send_pulses default", targetChannel);
+        return;
+    }
+    if (!isColorField(argv[index])) {
         setUnknown(result);
         return;
     }
@@ -449,7 +837,282 @@ void handleChannelClear(CustomLedConfig &config, const LocalLedCommandContext &c
     config.channels[targetChannel].led1_color = 0;
     config.channels[targetChannel].led2_color = 0;
     config.channels[targetChannel].configured = false;
-    setResponse(result, true, "OK ch=%u led cleared", targetChannel);
+    setResponse(result, true, "OK ch=%u color cleared", targetChannel);
+}
+
+void handleDirectMessageGet(const CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
+                            LocalLedCommandResult *result)
+{
+    if (argc == 0 || (argc == 1 && isColorField(argv[0]))) {
+        formatDirectMessageResponse(config, context, result);
+        return;
+    }
+    if (argc == 1 && isHelpToken(argv[0])) {
+        setResponse(result, false, "%s", kGetHelpText);
+        return;
+    }
+    if (argc == 1 && strcasecmp(argv[0], "notify_pulses") == 0) {
+        uint8_t notifyPulses =
+            config.direct_message.notification_pulses > 0 ? config.direct_message.notification_pulses : config.notification_pulses;
+        bool override = config.direct_message.notification_pulses > 0;
+        int8_t slot = context.has_direct_message_peer ? findDirectMessageUserSlot(config, context.direct_message_peer) : -1;
+        if (slot >= 0 && config.direct_message_users[slot].notification_pulses > 0) {
+            notifyPulses = config.direct_message_users[slot].notification_pulses;
+            override = true;
+        }
+        if (context.has_direct_message_peer) {
+            setResponse(result, false, "dm user=!%08X slot=%d notify_pulses=%u override=%s",
+                        (unsigned int)context.direct_message_peer, slot, notifyPulses, override ? "true" : "false");
+            return;
+        }
+        setResponse(result, false, "dm notify_pulses=%u override=%s", notifyPulses, override ? "true" : "false");
+        return;
+    }
+    if (argc == 1 && strcasecmp(argv[0], "send_pulses") == 0) {
+        uint8_t sendPulses = config.direct_message.send_pulses > 0 ? config.direct_message.send_pulses : config.send_pulses;
+        bool override = config.direct_message.send_pulses > 0;
+        int8_t slot = context.has_direct_message_peer ? findDirectMessageUserSlot(config, context.direct_message_peer) : -1;
+        if (slot >= 0 && config.direct_message_users[slot].send_pulses > 0) {
+            sendPulses = config.direct_message_users[slot].send_pulses;
+            override = true;
+        }
+        if (context.has_direct_message_peer) {
+            setResponse(result, false, "dm user=!%08X slot=%d send_pulses=%u override=%s",
+                        (unsigned int)context.direct_message_peer, slot, sendPulses, override ? "true" : "false");
+            return;
+        }
+        setResponse(result, false, "dm send_pulses=%u override=%s", sendPulses, override ? "true" : "false");
+        return;
+    }
+    setUnknown(result);
+}
+
+void handleDirectMessageSet(CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
+                            LocalLedCommandResult *result)
+{
+    if (argc == 0) {
+        setResponse(result, false, "%s", kDirectMessageHelpText);
+        return;
+    }
+    if (argc == 1 && isHelpToken(argv[0])) {
+        setResponse(result, false, "%s", kSetHelpText);
+        return;
+    }
+    if (strcasecmp(argv[0], "notify_pulses") == 0) {
+        uint32_t value = 0;
+        if (argc == 2 && isHelpToken(argv[1])) {
+            setResponse(result, false, "%s", kNotifyPulsesHelpText);
+            return;
+        }
+        if (argc == 1) {
+            setResponse(result, false, "ERR missing value");
+            return;
+        }
+        if (argc != 2 || !parseUnsigned(argv[1], &value) || value > kLocalLedMaxNotificationPulses) {
+            setResponse(result, false, "ERR invalid notify_pulses");
+            return;
+        }
+        bool isUser = false;
+        uint8_t slot = 0;
+        ChannelLedConfig *target = getDirectMessageCommandTarget(config, context, value > 0, result, &isUser, &slot);
+        if (!target) {
+            return;
+        }
+        target->notification_pulses = (uint8_t)value;
+        if (value == 0) {
+            if (isUser) {
+                pruneDirectMessageUserSlot(config, slot);
+                setResponse(result, true, "OK dm user=%u notify_pulses default", slot);
+            } else {
+                setResponse(result, true, "OK dm notify_pulses default");
+            }
+        } else {
+            if (isUser) {
+                setResponse(result, true, "OK dm user=%u notify_pulses=%u", slot, target->notification_pulses);
+            } else {
+                setResponse(result, true, "OK dm notify_pulses=%u", target->notification_pulses);
+            }
+        }
+        return;
+    }
+    if (strcasecmp(argv[0], "send_pulses") == 0) {
+        uint32_t value = 0;
+        if (argc == 2 && isHelpToken(argv[1])) {
+            setResponse(result, false, "%s", kSendPulsesHelpText);
+            return;
+        }
+        if (argc == 1) {
+            setResponse(result, false, "ERR missing value");
+            return;
+        }
+        if (argc != 2 || !parseUnsigned(argv[1], &value) || value > kLocalLedMaxNotificationPulses) {
+            setResponse(result, false, "ERR invalid send_pulses");
+            return;
+        }
+        bool isUser = false;
+        uint8_t slot = 0;
+        ChannelLedConfig *target = getDirectMessageCommandTarget(config, context, value > 0, result, &isUser, &slot);
+        if (!target) {
+            return;
+        }
+        target->send_pulses = (uint8_t)value;
+        if (value == 0) {
+            if (isUser) {
+                pruneDirectMessageUserSlot(config, slot);
+                setResponse(result, true, "OK dm user=%u send_pulses default", slot);
+            } else {
+                setResponse(result, true, "OK dm send_pulses default");
+            }
+        } else {
+            if (isUser) {
+                setResponse(result, true, "OK dm user=%u send_pulses=%u", slot, target->send_pulses);
+            } else {
+                setResponse(result, true, "OK dm send_pulses=%u", target->send_pulses);
+            }
+        }
+        return;
+    }
+    if (!isColorField(argv[0])) {
+        setUnknown(result);
+        return;
+    }
+    if (argc == 2 && isHelpToken(argv[1])) {
+        setResponse(result, false, "%s", kColorHelpText);
+        return;
+    }
+    if (argc == 1) {
+        setResponse(result, false, "ERR missing value");
+        return;
+    }
+    if (argc > 3) {
+        setResponse(result, false, "ERR too many colors");
+        return;
+    }
+
+    uint32_t color1 = 0;
+    uint32_t color2 = 0;
+    if (!parseColor(argv[1], &color1) || (argc == 3 && !parseColor(argv[2], &color2))) {
+        setResponse(result, false, "ERR invalid color");
+        return;
+    }
+
+    bool isUser = false;
+    uint8_t slot = 0;
+    ChannelLedConfig *target = getDirectMessageCommandTarget(config, context, true, result, &isUser, &slot);
+    if (!target) {
+        return;
+    }
+    assignColors(&target->led1_color, &target->led2_color, color1, argc == 3, color2);
+    target->configured = true;
+
+    char led1[8] = {};
+    char led2[8] = {};
+    formatColor(led1, sizeof(led1), target->led1_color);
+    formatColor(led2, sizeof(led2), target->led2_color);
+    if (isUser) {
+        setResponse(result, true, "OK dm user=%u !%08X color1=%s color2=%s", slot, (unsigned int)context.direct_message_peer, led1,
+                    led2);
+    } else {
+        setResponse(result, true, "OK dm color color1=%s color2=%s", led1, led2);
+    }
+}
+
+void handleDirectMessageClear(CustomLedConfig &config, const LocalLedCommandContext &context, uint8_t argc, char *argv[],
+                              LocalLedCommandResult *result)
+{
+    if (argc != 1 || isHelpToken(argv[0])) {
+        setResponse(result, false, "%s", kClearHelpText);
+        return;
+    }
+    if (strcasecmp(argv[0], "all") == 0) {
+        for (uint8_t i = 0; i < kLocalLedDirectMessageUserCapacity; ++i) {
+            clearDirectMessageUserSlot(config, i);
+        }
+        setResponse(result, true, "OK dm users cleared");
+        return;
+    }
+    uint32_t slotValue = 0;
+    if (parseUnsigned(argv[0], &slotValue)) {
+        if (slotValue >= kLocalLedDirectMessageUserCapacity) {
+            setResponse(result, false, "ERR invalid dm slot");
+            return;
+        }
+        clearDirectMessageUserSlot(config, (uint8_t)slotValue);
+        setResponse(result, true, "OK dm user=%u cleared", (unsigned int)slotValue);
+        return;
+    }
+    if (strcasecmp(argv[0], "notify_pulses") == 0) {
+        bool isUser = false;
+        uint8_t slot = 0;
+        ChannelLedConfig *target = getDirectMessageCommandTarget(config, context, false, result, &isUser, &slot);
+        if (!target) {
+            return;
+        }
+        target->notification_pulses = 0;
+        if (isUser) {
+            pruneDirectMessageUserSlot(config, slot);
+            setResponse(result, true, "OK dm user=%u notify_pulses default", slot);
+        } else {
+            setResponse(result, true, "OK dm notify_pulses default");
+        }
+        return;
+    }
+    if (strcasecmp(argv[0], "send_pulses") == 0) {
+        bool isUser = false;
+        uint8_t slot = 0;
+        ChannelLedConfig *target = getDirectMessageCommandTarget(config, context, false, result, &isUser, &slot);
+        if (!target) {
+            return;
+        }
+        target->send_pulses = 0;
+        if (isUser) {
+            pruneDirectMessageUserSlot(config, slot);
+            setResponse(result, true, "OK dm user=%u send_pulses default", slot);
+        } else {
+            setResponse(result, true, "OK dm send_pulses default");
+        }
+        return;
+    }
+    if (!isColorField(argv[0])) {
+        setUnknown(result);
+        return;
+    }
+
+    bool isUser = false;
+    uint8_t slot = 0;
+    ChannelLedConfig *target = getDirectMessageCommandTarget(config, context, false, result, &isUser, &slot);
+    if (!target) {
+        return;
+    }
+    target->led1_color = 0;
+    target->led2_color = 0;
+    target->configured = false;
+    if (isUser) {
+        pruneDirectMessageUserSlot(config, slot);
+        setResponse(result, true, "OK dm user=%u color cleared", slot);
+    } else {
+        setResponse(result, true, "OK dm color cleared");
+    }
+}
+
+void handleDirectMessageList(const CustomLedConfig &config, LocalLedCommandResult *result)
+{
+    char response[sizeof(result->response)] = {};
+    size_t offset = 0;
+    offset += snprintf(response + offset, sizeof(response) - offset, "dm users:");
+    bool any = false;
+    for (uint8_t i = 0; i < kLocalLedDirectMessageUserCapacity && offset < sizeof(response); ++i) {
+        if (config.direct_message_nodes[i] == 0) {
+            continue;
+        }
+        any = true;
+        offset += snprintf(response + offset, sizeof(response) - offset, " %u=!%08X", i,
+                           (unsigned int)config.direct_message_nodes[i]);
+    }
+    if (!any) {
+        snprintf(response, sizeof(response), "dm users: none");
+    }
+    setResponse(result, false, "%s", response);
 }
 } // namespace
 
@@ -470,23 +1133,30 @@ bool handleLocalLedCommand(CustomLedConfig &config, const LocalLedCommandContext
     char *tokens[8] = {};
     const uint8_t tokenCount = tokenize(buffer, tokens, 8);
     if (tokenCount == 0) {
-        setUnknown(result);
+        setResponse(result, false, "%s", kHelpText);
         return true;
     }
 
-    if (strcasecmp(tokens[0], "help") == 0) {
+    if (isHelpToken(tokens[0])) {
         if (tokenCount == 1) {
             setResponse(result, false, "%s", kHelpText);
-        } else if (tokenCount == 2 && strcasecmp(tokens[1], "colors") == 0) {
-            setResponse(result, false, "%s", kColorsText);
-        } else {
+        } else if (tokenCount != 2 || !setHelpForTopic(tokens[1], result)) {
+            setUnknown(result);
+        }
+        return true;
+    }
+
+    if (tokenCount == 2 && isHelpToken(tokens[1])) {
+        if (!setHelpForTopic(tokens[0], result)) {
             setUnknown(result);
         }
         return true;
     }
 
     if (tokenCount < 2) {
-        setUnknown(result);
+        if (!setHelpForTopic(tokens[0], result)) {
+            setUnknown(result);
+        }
         return true;
     }
 
@@ -495,7 +1165,28 @@ bool handleLocalLedCommand(CustomLedConfig &config, const LocalLedCommandContext
     char **argv = tokenCount > 2 ? &tokens[2] : nullptr;
     uint8_t argc = tokenCount > 2 ? (uint8_t)(tokenCount - 2) : 0;
 
+    if (isHelpToken(scope)) {
+        if (!setHelpForTopic(verb, result)) {
+            setUnknown(result);
+        }
+        return true;
+    }
+
+    if (isContextualScopedField(scope)) {
+        char **contextArgv = &tokens[1];
+        const uint8_t contextArgc = (uint8_t)(tokenCount - 1);
+        if (handleContextualScopedCommand(config, context, verb, contextArgc, contextArgv, result)) {
+            return true;
+        }
+    }
+
     if (strcasecmp(scope, "node") == 0) {
+        if (argc == 1 && isHelpToken(argv[0])) {
+            if (!setHelpForTopic(verb, result)) {
+                setResponse(result, false, "%s", kNodeHelpText);
+            }
+            return true;
+        }
         if (strcasecmp(verb, "get") == 0) {
             handleNodeGet(config, argc, argv, result);
             return true;
@@ -509,6 +1200,12 @@ bool handleLocalLedCommand(CustomLedConfig &config, const LocalLedCommandContext
     }
 
     if (strcasecmp(scope, "ch") == 0) {
+        if (argc == 1 && isHelpToken(argv[0])) {
+            if (!setHelpForTopic(verb, result)) {
+                setResponse(result, false, "%s", kChannelHelpText);
+            }
+            return true;
+        }
         if (strcasecmp(verb, "get") == 0) {
             handleChannelGet(config, context, argc, argv, result);
             return true;
@@ -519,6 +1216,37 @@ bool handleLocalLedCommand(CustomLedConfig &config, const LocalLedCommandContext
         }
         if (strcasecmp(verb, "clear") == 0) {
             handleChannelClear(config, context, argc, argv, result);
+            return true;
+        }
+        setUnknown(result);
+        return true;
+    }
+
+    if (strcasecmp(scope, "dm") == 0 || strcasecmp(scope, "direct") == 0) {
+        if (argc == 1 && isHelpToken(argv[0])) {
+            if (!setHelpForTopic(verb, result)) {
+                setResponse(result, false, "%s", kDirectMessageHelpText);
+            }
+            return true;
+        }
+        if (strcasecmp(verb, "get") == 0) {
+            handleDirectMessageGet(config, context, argc, argv, result);
+            return true;
+        }
+        if (strcasecmp(verb, "set") == 0) {
+            handleDirectMessageSet(config, context, argc, argv, result);
+            return true;
+        }
+        if (strcasecmp(verb, "clear") == 0) {
+            handleDirectMessageClear(config, context, argc, argv, result);
+            return true;
+        }
+        if (strcasecmp(verb, "list") == 0) {
+            if (argc != 0) {
+                setUnknown(result);
+            } else {
+                handleDirectMessageList(config, result);
+            }
             return true;
         }
         setUnknown(result);

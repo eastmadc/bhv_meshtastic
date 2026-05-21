@@ -1,6 +1,7 @@
 #include "LocalLedCommandModule.h"
 
 #include "MeshService.h"
+#include "NodeDB.h"
 #include "led/LocalLedConfig.h"
 
 #include <string.h>
@@ -23,6 +24,8 @@ ProcessMessage LocalLedCommandModule::handleReceived(const meshtastic_MeshPacket
     LocalLedCommandContext context = {
         localLedResolveIncomingChannel(mp, &resolvedChannel),
         resolvedChannel,
+        isToUs(&mp) && !isBroadcast(mp.to),
+        mp.from,
         false,
         mp.id,
         resolvedChannel,

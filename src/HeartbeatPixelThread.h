@@ -22,6 +22,11 @@ class HeartbeatPixelThread : private concurrency::OSThread
   public:
     HeartbeatPixelThread();
     bool enqueueChannelNotification(uint8_t channel);
+    bool enqueueDirectMessageNotification();
+    bool enqueueDirectMessageNotification(uint32_t nodeNum);
+    bool enqueueChannelSendNotification(uint8_t channel);
+    bool enqueueDirectMessageSendNotification(uint32_t nodeNum);
+    bool enqueueCommandStatusPattern(bool accepted);
 
   protected:
     int32_t runOnce() override;
@@ -71,16 +76,28 @@ class HeartbeatPixelThread : private concurrency::OSThread
         double ledStartOffsets[HEARTBEAT_NEOPIXEL_COUNT_PER_STRIP * 2] = {};
     };
 
+    struct PatternEvent {
+        bool active = false;
+        const LedPulseConfig *config = nullptr;
+        RgbColor color = {};
+        uint32_t startMs = 0;
+        uint32_t durationMs = 0;
+    };
+
     static constexpr uint8_t kCountPerStrip = HEARTBEAT_NEOPIXEL_COUNT_PER_STRIP;
     static constexpr uint8_t kLedCount = kCountPerStrip * 2;
     static constexpr uint32_t kAnimationIntervalMs = 25;
     static constexpr float kOutputScale = 0.35f;
     static constexpr uint16_t kStartupBpm = 80;
+    static constexpr uint32_t kStartupDurationMs = 1100;
     static constexpr uint8_t kNotificationQueueSize = 8;
+    static constexpr uint8_t kPatternQueueSize = 4;
     static constexpr uint8_t kLed1SequenceLength = 7;
     static constexpr uint8_t kLed2SequenceLength = 7;
     static constexpr double kInactiveSequenceOffset = -1.0;
-    static const float kPixelBrightnessModifiers[kLedCount];
+    static const float kPixelMinBrightness[kLedCount];
+    static const float kPixelMaxBrightness[kLedCount];
+    static const float kPixelBrightnessRange[kLedCount];
     static const bool kPixelUsesLed1Color[kLedCount];
     static const uint8_t kLed1NotificationSequence[kLed1SequenceLength];
     static const uint8_t kLed2NotificationSequence[kLed2SequenceLength];
@@ -88,8 +105,12 @@ class HeartbeatPixelThread : private concurrency::OSThread
     Adafruit_NeoPixel pixels;
     mutable concurrency::Lock notificationLock;
     PendingNotification notificationQueue[kNotificationQueueSize];
+    PatternEvent patternQueue[kPatternQueueSize];
     uint8_t notificationQueueHead = 0;
     uint8_t notificationQueueCount = 0;
+    uint8_t patternQueueHead = 0;
+    uint8_t patternQueueCount = 0;
+    PatternEvent activePattern;
     NotificationLane led1NotificationLane;
     NotificationLane led2NotificationLane;
     NotificationSequenceTiming led1SequenceTiming;
@@ -98,6 +119,7 @@ class HeartbeatPixelThread : private concurrency::OSThread
     bool initialized = false;
     bool runningStartup = true;
     bool stripsAreDark = true;
+    bool stripsPowered = false;
     bool hasNotificationProgress = false;
     uint32_t startupStartMs = 0;
     uint32_t nextFrameMs = 0;
@@ -112,18 +134,24 @@ class HeartbeatPixelThread : private concurrency::OSThread
     void initializeHardware();
     void initializeNotificationSequenceTimings();
     void renderStartupFrame(uint32_t nowMs);
-    void renderHeartbeatFrame(uint32_t nowMs, const LocalLedEffectiveConfig &effective);
+    bool renderPatternFrame(uint32_t nowMs);
+    void renderHeartbeatFrame(uint32_t nowMs, const LocalLedEffectiveConfig &effective, bool baseHeartbeatEnabled);
     void idleOff();
     void applyFrame(double cycleTimeMs, double activeWindowMs, double currentTimeMs, const LedPulseConfig *config,
-                    const LocalLedEffectiveConfig &effective);
+                    const LocalLedEffectiveConfig &effective, bool baseHeartbeatEnabled = true);
     void updateNotificationSequences(double cycleTimeMs, double activeWindowMs, double currentTimeMs, bool allowNewNotifications);
     void processNotificationLane(NotificationLane &lane, const NotificationSequenceTiming &timing, bool useLed1Color,
                                  double previousProgress, double currentProgress, double activeWindowScale);
     bool loadNotificationLane(NotificationLane &lane, const NotificationSequenceTiming &timing, bool useLed1Color,
                               double laneStartProgress, double activeWindowScale);
     bool notificationChannelIsPendingLocked(uint8_t channel) const;
+    bool notificationStateNeedsRender() const;
+    bool enqueueNotification(const LocalLedEffectiveConfig &effective, uint8_t pulseCount);
+    bool enqueuePattern(const LedPulseConfig *config, uint32_t color, uint32_t durationMs);
     PendingNotification *notificationQueueFrontLocked();
     void popNotificationQueueLocked();
+    PatternEvent *patternQueueFrontLocked();
+    void popPatternQueueLocked();
     void clearNotificationState();
     static bool crossedProgressPhase(double previousProgress, double currentProgress, double phase);
     static bool notificationAppliesToPixel(const NotificationLane &lane, uint8_t ledIndex, double currentProgress);
@@ -140,6 +168,7 @@ class HeartbeatPixelThread : private concurrency::OSThread
     int handleDeepSleep(void *unused);
 
     static const LedPulseConfig startupConfig[kLedCount];
+    static const LedPulseConfig originalStartupConfig[kLedCount];
     static const LedPulseConfig heartbeatConfig[kLedCount];
 };
 

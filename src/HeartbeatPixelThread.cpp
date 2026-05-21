@@ -17,19 +17,35 @@ HeartbeatPixelThread *heartbeatPixelThread = nullptr;
 // Pattern arrays are stored directly in the current physical LED order:
 // new D1..D14 = old D4, D3, D2, D1, D12, D13, D14, D7, D6, D8, D11, D5, D9, D10.
 const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::startupConfig[HeartbeatPixelThread::kLedCount] = {
+    {0.185f, 0.220f}, {0.130f, 0.220f}, {0.075f, 0.220f}, {0.020f, 0.220f}, {0.640f, 0.220f}, {0.695f, 0.220f},
+    {0.750f, 0.220f}, {0.350f, 0.220f}, {0.295f, 0.220f}, {0.420f, 0.220f}, {0.585f, 0.220f}, {0.240f, 0.220f},
+    {0.475f, 0.220f}, {0.530f, 0.220f},
+};
+
+const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::originalStartupConfig[HeartbeatPixelThread::kLedCount] = {
     {0.0972f, 0.50f}, {0.0873f, 0.50f}, {0.2016f, 0.50f}, {0.3237f, 0.50f}, {0.2241f, 0.50f}, {0.3065f, 0.50f},
     {0.3417f, 0.50f}, {0.2739f, 0.50f}, {0.2154f, 0.50f}, {0.1781f, 0.50f}, {0.0967f, 0.50f}, {0.0760f, 0.50f},
     {0.1110f, 0.50f}, {0.1004f, 0.50f},
 };
 
 const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::heartbeatConfig[HeartbeatPixelThread::kLedCount] = {
-    {0.2585f, 0.3041f}, {0.1585f, 0.4541f}, {0.6712f, 0.7581f}, {0.5600f, 0.7200f}, {0.5723f, 0.2860f},
+    {0.2585f, 0.3041f}, {0.0985f, 0.5741f}, {0.6712f, 0.7581f}, {0.5600f, 0.7200f}, {0.5723f, 0.2860f},
     {0.6145f, 0.2856f}, {0.6566f, 0.3256f}, {0.7100f, 0.3600f}, {0.5223f, 0.4670f}, {0.6712f, 0.7581f},
-    {0.4513f, 0.4520f}, {0.4508f, 0.4550f}, {0.1585f, 0.4541f}, {0.2589f, 0.3016f},
+    {0.4513f, 0.4520f}, {0.4508f, 0.4550f}, {0.0985f, 0.5741f}, {0.2589f, 0.3016f},
 };
 
-const float HeartbeatPixelThread::kPixelBrightnessModifiers[HeartbeatPixelThread::kLedCount] = {
-    1.0f, 1.0f, 1.0f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+// Per-LED brightness windows are stored in the current physical LED order.
+// They were remapped from the original layout so the same physical LEDs keep the same visual trim.
+const float HeartbeatPixelThread::kPixelMinBrightness[HeartbeatPixelThread::kLedCount] = {
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+};
+
+const float HeartbeatPixelThread::kPixelMaxBrightness[HeartbeatPixelThread::kLedCount] = {
+    0.4f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.4f, 0.4f, 0.4f, 0.5f, 0.4f, 0.4f, 0.5f,
+};
+
+const float HeartbeatPixelThread::kPixelBrightnessRange[HeartbeatPixelThread::kLedCount] = {
+    0.4f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.4f, 0.4f, 0.4f, 0.5f, 0.4f, 0.4f, 0.5f,
 };
 
 const bool HeartbeatPixelThread::kPixelUsesLed1Color[HeartbeatPixelThread::kLedCount] = {
@@ -69,12 +85,13 @@ int32_t HeartbeatPixelThread::runOnce()
 
     if (runningStartup) {
         renderStartupFrame(nowMs);
-        if ((nowMs - startupStartMs) >= (uint32_t)(60000.0f / kStartupBpm)) {
+        if ((nowMs - startupStartMs) >= kStartupDurationMs) {
             runningStartup = false;
             idleOff();
         }
     } else {
-        LocalLedEffectiveConfig effective = {0x0000FF, 0xFF0000, 80, 0, kLocalLedDefaultNotificationPulses, false, 0};
+        LocalLedEffectiveConfig effective = {
+            0x0000FF, 0xFF0000, 80, 0, kLocalLedDefaultNotificationPulses, kLocalLedDefaultSendPulses, false, 0};
         if (localLedConfigStore) {
             const CustomLedConfig cfg = localLedConfigStore->getConfig();
             effective.led1_color = cfg.node_led1_color;
@@ -82,17 +99,24 @@ int32_t HeartbeatPixelThread::runOnce()
             effective.idle_bpm = cfg.idle_bpm;
             effective.idle_delay_ms = cfg.idle_delay_ms;
             effective.notification_pulses = cfg.notification_pulses;
+            effective.send_pulses = cfg.send_pulses;
         }
         bool heartRateActive = false;
 #if !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY
         heartRateActive = healthTelemetryModule && healthTelemetryModule->isHeartRateActive();
 #endif
-        if (heartRateActive) {
+        if (renderPatternFrame(nowMs)) {
+            // One-shot status patterns deliberately override the live heartbeat for a short, unambiguous response.
+        } else if (heartRateActive) {
             syncBpm(nowMs);
-            renderHeartbeatFrame(nowMs, effective);
+            renderHeartbeatFrame(nowMs, effective, true);
         } else if (!config.device.led_heartbeat_disabled) {
             currentBpm = effective.idle_bpm;
-            renderHeartbeatFrame(nowMs, effective);
+            renderHeartbeatFrame(nowMs, effective, true);
+        } else if (notificationStateNeedsRender()) {
+            currentBpm = effective.idle_bpm;
+            heartbeatOffsetMs = 0.0f;
+            renderHeartbeatFrame(nowMs, effective, false);
         } else {
             currentBpm = effective.idle_bpm;
             heartbeatOffsetMs = 0.0f;
@@ -149,20 +173,54 @@ void HeartbeatPixelThread::initializeNotificationSequenceTimings()
 
 void HeartbeatPixelThread::renderStartupFrame(uint32_t nowMs)
 {
-    const double cycleTimeMs = 60000.0 / (double)kStartupBpm;
+    const double cycleTimeMs = (double)kStartupDurationMs;
     const double elapsedMs = (double)(nowMs - startupStartMs);
-    LocalLedEffectiveConfig startupEffective = {0x0000FF, 0xFF0000, kStartupBpm, 0, kLocalLedDefaultNotificationPulses, true, 0};
+    LocalLedEffectiveConfig startupEffective = {
+        0x0000FF, 0xFF0000, kStartupBpm, 0, kLocalLedDefaultNotificationPulses, kLocalLedDefaultSendPulses, true, 0};
     hasNotificationProgress = false;
     applyFrame(cycleTimeMs, cycleTimeMs, elapsedMs, startupConfig, startupEffective);
 }
 
-void HeartbeatPixelThread::renderHeartbeatFrame(uint32_t nowMs, const LocalLedEffectiveConfig &effective)
+bool HeartbeatPixelThread::renderPatternFrame(uint32_t nowMs)
+{
+    PatternEvent pattern = {};
+    {
+        concurrency::LockGuard guard(&notificationLock);
+        if (!activePattern.active) {
+            PatternEvent *queued = patternQueueFrontLocked();
+            if (!queued) {
+                return false;
+            }
+            activePattern = *queued;
+            activePattern.startMs = nowMs;
+            popPatternQueueLocked();
+        }
+
+        if ((nowMs - activePattern.startMs) >= activePattern.durationMs) {
+            activePattern = PatternEvent{};
+            return false;
+        }
+        pattern = activePattern;
+    }
+
+    const double elapsedMs = (double)(nowMs - pattern.startMs);
+    const double durationMs = (double)pattern.durationMs;
+    for (uint8_t i = 0; i < kLedCount; ++i) {
+        const float brightness =
+            calculateBrightness(durationMs, elapsedMs, pattern.config[i].startTime * durationMs, pattern.config[i].pulseWidth * durationMs);
+        setPixel(i, pattern.color, brightness);
+    }
+    showStrips();
+    return true;
+}
+
+void HeartbeatPixelThread::renderHeartbeatFrame(uint32_t nowMs, const LocalLedEffectiveConfig &effective, bool baseHeartbeatEnabled)
 {
     const double activeWindowMs = 60000.0 / (double)currentBpm;
     const double cycleTimeMs = activeWindowMs + (double)effective.idle_delay_ms;
     const double currentTimeMs = (double)nowMs + heartbeatOffsetMs;
     updateNotificationSequences(cycleTimeMs, activeWindowMs, currentTimeMs, true);
-    applyFrame(cycleTimeMs, activeWindowMs, currentTimeMs, heartbeatConfig, effective);
+    applyFrame(cycleTimeMs, activeWindowMs, currentTimeMs, heartbeatConfig, effective, baseHeartbeatEnabled);
 }
 
 void HeartbeatPixelThread::idleOff()
@@ -170,10 +228,11 @@ void HeartbeatPixelThread::idleOff()
     if (!stripsAreDark) {
         clearStrips();
     }
+    powerStrips(false);
 }
 
 void HeartbeatPixelThread::applyFrame(double cycleTimeMs, double activeWindowMs, double currentTimeMs, const LedPulseConfig *config,
-                                      const LocalLedEffectiveConfig &effective)
+                                      const LocalLedEffectiveConfig &effective, bool baseHeartbeatEnabled)
 {
     const RgbColor led1Color = colorFromHex(effective.led1_color);
     const RgbColor led2Color = colorFromHex(effective.led2_color);
@@ -197,7 +256,7 @@ void HeartbeatPixelThread::applyFrame(double cycleTimeMs, double activeWindowMs,
                           : notificationAppliesToPixel(led2LaneSnapshot, i, progressSnapshot);
         const RgbColor &color =
             useNotificationColor ? (usesLed1Color ? led1LaneSnapshot.color : led2LaneSnapshot.color) : baseColor;
-        setPixel(i, color, brightness);
+        setPixel(i, color, (baseHeartbeatEnabled || useNotificationColor) ? brightness : 0.0f);
     }
     showStrips();
 }
@@ -208,7 +267,57 @@ bool HeartbeatPixelThread::enqueueChannelNotification(uint8_t channel)
         return false;
     }
 
-    LocalLedEffectiveConfig effective = localLedConfigStore->getEffectiveConfigForChannel(channel);
+    const LocalLedEffectiveConfig effective = localLedConfigStore->getEffectiveConfigForChannel(channel);
+    return enqueueNotification(effective, effective.notification_pulses);
+}
+
+bool HeartbeatPixelThread::enqueueDirectMessageNotification()
+{
+    if (!localLedConfigStore) {
+        return false;
+    }
+
+    const LocalLedEffectiveConfig effective = localLedConfigStore->getEffectiveConfigForDirectMessage();
+    return enqueueNotification(effective, effective.notification_pulses);
+}
+
+bool HeartbeatPixelThread::enqueueDirectMessageNotification(uint32_t nodeNum)
+{
+    if (!localLedConfigStore) {
+        return false;
+    }
+
+    const LocalLedEffectiveConfig effective = localLedConfigStore->getEffectiveConfigForDirectMessage(nodeNum);
+    return enqueueNotification(effective, effective.notification_pulses);
+}
+
+bool HeartbeatPixelThread::enqueueChannelSendNotification(uint8_t channel)
+{
+    if (!localLedConfigStore) {
+        return false;
+    }
+
+    const LocalLedEffectiveConfig effective = localLedConfigStore->getEffectiveConfigForChannel(channel);
+    return enqueueNotification(effective, effective.send_pulses);
+}
+
+bool HeartbeatPixelThread::enqueueDirectMessageSendNotification(uint32_t nodeNum)
+{
+    if (!localLedConfigStore) {
+        return false;
+    }
+
+    const LocalLedEffectiveConfig effective = localLedConfigStore->getEffectiveConfigForDirectMessage(nodeNum);
+    return enqueueNotification(effective, effective.send_pulses);
+}
+
+bool HeartbeatPixelThread::enqueueCommandStatusPattern(bool accepted)
+{
+    return enqueuePattern(originalStartupConfig, accepted ? 0x00FF00 : 0xFF0000, (uint32_t)(60000.0f / kStartupBpm));
+}
+
+bool HeartbeatPixelThread::enqueueNotification(const LocalLedEffectiveConfig &effective, uint8_t pulseCount)
+{
     if (!effective.configured) {
         return false;
     }
@@ -223,12 +332,32 @@ bool HeartbeatPixelThread::enqueueChannelNotification(uint8_t channel)
     notificationQueue[insertIndex].channel = effective.channel_index;
     notificationQueue[insertIndex].led1Color = colorFromHex(effective.led1_color);
     notificationQueue[insertIndex].led2Color = colorFromHex(effective.led2_color);
-    notificationQueue[insertIndex].pulseCount =
-        effective.notification_pulses > 0 ? effective.notification_pulses : kLocalLedDefaultNotificationPulses;
+    notificationQueue[insertIndex].pulseCount = pulseCount > 0 ? pulseCount : kLocalLedDefaultSendPulses;
     notificationQueue[insertIndex].eligibleProgress = hasNotificationProgress ? floor(notificationProgress) + 1.0 : 0.0;
     notificationQueue[insertIndex].led1Loaded = false;
     notificationQueue[insertIndex].led2Loaded = false;
     notificationQueueCount++;
+    return true;
+}
+
+bool HeartbeatPixelThread::enqueuePattern(const LedPulseConfig *config, uint32_t color, uint32_t durationMs)
+{
+    if (!config || durationMs == 0) {
+        return false;
+    }
+
+    concurrency::LockGuard guard(&notificationLock);
+    if (patternQueueCount >= kPatternQueueSize) {
+        return false;
+    }
+
+    const uint8_t insertIndex = (patternQueueHead + patternQueueCount) % kPatternQueueSize;
+    patternQueue[insertIndex].active = true;
+    patternQueue[insertIndex].config = config;
+    patternQueue[insertIndex].color = colorFromHex(color);
+    patternQueue[insertIndex].durationMs = durationMs;
+    patternQueue[insertIndex].startMs = 0;
+    patternQueueCount++;
     return true;
 }
 
@@ -347,6 +476,13 @@ bool HeartbeatPixelThread::notificationChannelIsPendingLocked(uint8_t channel) c
     return false;
 }
 
+bool HeartbeatPixelThread::notificationStateNeedsRender() const
+{
+    concurrency::LockGuard guard(&notificationLock);
+    return notificationQueueCount > 0 || led1NotificationLane.active || led2NotificationLane.active || activePattern.active ||
+           patternQueueCount > 0;
+}
+
 HeartbeatPixelThread::PendingNotification *HeartbeatPixelThread::notificationQueueFrontLocked()
 {
     if (notificationQueueCount == 0) {
@@ -367,6 +503,26 @@ void HeartbeatPixelThread::popNotificationQueueLocked()
     notificationQueueCount--;
 }
 
+HeartbeatPixelThread::PatternEvent *HeartbeatPixelThread::patternQueueFrontLocked()
+{
+    if (patternQueueCount == 0) {
+        return nullptr;
+    }
+    PatternEvent &front = patternQueue[patternQueueHead];
+    return front.active ? &front : nullptr;
+}
+
+void HeartbeatPixelThread::popPatternQueueLocked()
+{
+    if (patternQueueCount == 0) {
+        return;
+    }
+
+    patternQueue[patternQueueHead] = PatternEvent{};
+    patternQueueHead = (patternQueueHead + 1) % kPatternQueueSize;
+    patternQueueCount--;
+}
+
 void HeartbeatPixelThread::clearNotificationState()
 {
     concurrency::LockGuard guard(&notificationLock);
@@ -375,6 +531,12 @@ void HeartbeatPixelThread::clearNotificationState()
     for (uint8_t i = 0; i < kNotificationQueueSize; ++i) {
         notificationQueue[i] = PendingNotification{};
     }
+    patternQueueHead = 0;
+    patternQueueCount = 0;
+    for (uint8_t i = 0; i < kPatternQueueSize; ++i) {
+        patternQueue[i] = PatternEvent{};
+    }
+    activePattern = PatternEvent{};
     led1NotificationLane = NotificationLane{};
     led2NotificationLane = NotificationLane{};
     hasNotificationProgress = false;
@@ -479,7 +641,7 @@ HeartbeatPixelThread::RgbColor HeartbeatPixelThread::colorFromHex(uint32_t color
 
 void HeartbeatPixelThread::setPixel(uint8_t index, const RgbColor &color, float brightness)
 {
-    const float scaledBrightness = brightness * kPixelBrightnessModifiers[index];
+    const float scaledBrightness = kPixelMinBrightness[index] + (brightness * kPixelBrightnessRange[index]);
     const uint8_t red = (uint8_t)roundf((float)color.red * kOutputScale * scaledBrightness);
     const uint8_t green = (uint8_t)roundf((float)color.green * kOutputScale * scaledBrightness);
     const uint8_t blue = (uint8_t)roundf((float)color.blue * kOutputScale * scaledBrightness);
@@ -489,6 +651,7 @@ void HeartbeatPixelThread::setPixel(uint8_t index, const RgbColor &color, float 
 
 void HeartbeatPixelThread::showStrips()
 {
+    powerStrips(true);
     pixels.show();
     stripsAreDark = false;
 }
@@ -502,12 +665,22 @@ void HeartbeatPixelThread::clearStrips()
 
 void HeartbeatPixelThread::powerStrips(bool on)
 {
+    if (stripsPowered == on) {
+        return;
+    }
 #ifdef HEARTBEAT_NEOPIXEL_POWER_PIN
     pinMode(HEARTBEAT_NEOPIXEL_POWER_PIN, OUTPUT);
+    if (!on) {
+        delay(1); // Let a preceding all-off NeoPixel frame latch before removing strip power.
+    }
     digitalWrite(HEARTBEAT_NEOPIXEL_POWER_PIN, on ? HIGH : LOW);
+    if (on) {
+        delay(1); // Give the strip rail a moment to settle before the next pixel frame.
+    }
 #else
     (void)on;
 #endif
+    stripsPowered = on;
 }
 
 int HeartbeatPixelThread::handleDeepSleep(void *unused)
@@ -516,7 +689,6 @@ int HeartbeatPixelThread::handleDeepSleep(void *unused)
     clearNotificationState();
     if (initialized) {
         clearStrips();
-        delay(1); // Let the final all-off NeoPixel frame latch before cutting strip power.
     }
     powerStrips(false);
     return 0;

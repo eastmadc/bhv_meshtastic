@@ -11,6 +11,9 @@
 #include "mesh/NodeDB.h"
 #include "mesh/Router.h"
 #include "power/PowerHAL.h"
+#ifdef HAS_HEARTBEAT_NEOPIXELS
+#include "HeartbeatPixelThread.h"
+#endif
 
 #include <string.h>
 
@@ -18,10 +21,14 @@ namespace
 {
 static constexpr const char *kFileName = "/prefs/custom_led.bin";
 static constexpr uint32_t kMagic = 0x434C4544;
-static constexpr uint16_t kVersion = 5;
+static constexpr uint16_t kVersion = 8;
 static constexpr size_t kLegacySerializedSize = 94;
-static constexpr size_t kSerializedSize = 103;
+static constexpr size_t kV5SerializedSize = 103;
+static constexpr size_t kV6SerializedSize = 113;
+static constexpr size_t kV7SerializedSize = 253;
+static constexpr size_t kSerializedSize = 273;
 static constexpr uint32_t kLocalReplyDelayMs = 500;
+static constexpr uint32_t kLocalLedCommandBotNode = 0x4C454421; // !4C454421, "LED!"
 
 class LocalLedReplyDispatcher : private concurrency::OSThread
 {
@@ -133,6 +140,14 @@ bool hasAnyChannelOverrides(const CustomLedConfig &config)
             return true;
         }
     }
+    if (config.direct_message.configured) {
+        return true;
+    }
+    for (size_t i = 0; i < kLocalLedDirectMessageUserCapacity; ++i) {
+        if (config.direct_message_nodes[i] != 0 && config.direct_message_users[i].configured) {
+            return true;
+        }
+    }
     return false;
 }
 
@@ -209,11 +224,26 @@ void LocalLedConfigStore::applyDefaults(CustomLedConfig *defaults)
     defaults->idle_bpm = 80;
     defaults->idle_delay_ms = 0;
     defaults->notification_pulses = kLocalLedDefaultNotificationPulses;
+    defaults->send_pulses = kLocalLedDefaultSendPulses;
     for (size_t i = 0; i < 8; ++i) {
         defaults->channels[i].led1_color = 0;
         defaults->channels[i].led2_color = 0;
         defaults->channels[i].notification_pulses = 0;
+        defaults->channels[i].send_pulses = 0;
         defaults->channels[i].configured = false;
+    }
+    defaults->direct_message.led1_color = 0;
+    defaults->direct_message.led2_color = 0;
+    defaults->direct_message.notification_pulses = 0;
+    defaults->direct_message.send_pulses = 0;
+    defaults->direct_message.configured = false;
+    for (size_t i = 0; i < kLocalLedDirectMessageUserCapacity; ++i) {
+        defaults->direct_message_nodes[i] = 0;
+        defaults->direct_message_users[i].led1_color = 0;
+        defaults->direct_message_users[i].led2_color = 0;
+        defaults->direct_message_users[i].notification_pulses = 0;
+        defaults->direct_message_users[i].send_pulses = 0;
+        defaults->direct_message_users[i].configured = false;
     }
 }
 
@@ -232,11 +262,26 @@ bool LocalLedConfigStore::serializeConfig(const CustomLedConfig &source, uint8_t
     writeUint16(buffer, offset, source.idle_bpm);
     writeUint32(buffer, offset, source.idle_delay_ms);
     buffer[offset++] = source.notification_pulses;
+    buffer[offset++] = source.send_pulses;
     for (size_t i = 0; i < 8; ++i) {
         writeUint32(buffer, offset, source.channels[i].led1_color);
         writeUint32(buffer, offset, source.channels[i].led2_color);
         buffer[offset++] = source.channels[i].notification_pulses;
+        buffer[offset++] = source.channels[i].send_pulses;
         buffer[offset++] = source.channels[i].configured ? 1 : 0;
+    }
+    writeUint32(buffer, offset, source.direct_message.led1_color);
+    writeUint32(buffer, offset, source.direct_message.led2_color);
+    buffer[offset++] = source.direct_message.notification_pulses;
+    buffer[offset++] = source.direct_message.send_pulses;
+    buffer[offset++] = source.direct_message.configured ? 1 : 0;
+    for (size_t i = 0; i < kLocalLedDirectMessageUserCapacity; ++i) {
+        writeUint32(buffer, offset, source.direct_message_nodes[i]);
+        writeUint32(buffer, offset, source.direct_message_users[i].led1_color);
+        writeUint32(buffer, offset, source.direct_message_users[i].led2_color);
+        buffer[offset++] = source.direct_message_users[i].notification_pulses;
+        buffer[offset++] = source.direct_message_users[i].send_pulses;
+        buffer[offset++] = source.direct_message_users[i].configured ? 1 : 0;
     }
 
     if (usedBytes) {
@@ -260,7 +305,8 @@ bool LocalLedConfigStore::deserializeConfig(const uint8_t *buffer, size_t length
         return false;
     }
     if (magic != kMagic || channelCount != 8 || (version < 1 || version > kVersion) ||
-        (version >= 5 && length < kSerializedSize)) {
+        (version >= 5 && length < kV5SerializedSize) || (version >= 6 && length < kV6SerializedSize) ||
+        (version >= 7 && length < kV7SerializedSize) || (version >= 8 && length < kSerializedSize)) {
         return false;
     }
 
@@ -276,6 +322,12 @@ bool LocalLedConfigStore::deserializeConfig(const uint8_t *buffer, size_t length
             return false;
         }
         decoded.notification_pulses = buffer[offset++];
+        if (version >= 8) {
+            if (offset >= length) {
+                return false;
+            }
+            decoded.send_pulses = buffer[offset++];
+        }
     }
     for (size_t i = 0; i < 8; ++i) {
         if (!readUint32(buffer, length, offset, &decoded.channels[i].led1_color) ||
@@ -284,19 +336,79 @@ bool LocalLedConfigStore::deserializeConfig(const uint8_t *buffer, size_t length
         }
         if (version >= 5) {
             decoded.channels[i].notification_pulses = buffer[offset++];
+            if (version >= 8) {
+                if (offset >= length) {
+                    return false;
+                }
+                decoded.channels[i].send_pulses = buffer[offset++];
+            }
             if (offset >= length) {
                 return false;
             }
         }
         decoded.channels[i].configured = buffer[offset++] != 0;
     }
+    if (version >= 6) {
+        if (!readUint32(buffer, length, offset, &decoded.direct_message.led1_color) ||
+            !readUint32(buffer, length, offset, &decoded.direct_message.led2_color) || offset >= length) {
+            return false;
+        }
+        decoded.direct_message.notification_pulses = buffer[offset++];
+        if (version >= 8) {
+            if (offset >= length) {
+                return false;
+            }
+            decoded.direct_message.send_pulses = buffer[offset++];
+        }
+        if (offset >= length) {
+            return false;
+        }
+        decoded.direct_message.configured = buffer[offset++] != 0;
+    }
+    if (version >= 7) {
+        for (size_t i = 0; i < kLocalLedDirectMessageUserCapacity; ++i) {
+            if (!readUint32(buffer, length, offset, &decoded.direct_message_nodes[i]) ||
+                !readUint32(buffer, length, offset, &decoded.direct_message_users[i].led1_color) ||
+                !readUint32(buffer, length, offset, &decoded.direct_message_users[i].led2_color) || offset >= length) {
+                return false;
+            }
+            decoded.direct_message_users[i].notification_pulses = buffer[offset++];
+            if (version >= 8) {
+                if (offset >= length) {
+                    return false;
+                }
+                decoded.direct_message_users[i].send_pulses = buffer[offset++];
+            }
+            if (offset >= length) {
+                return false;
+            }
+            decoded.direct_message_users[i].configured = buffer[offset++] != 0;
+            if (decoded.direct_message_nodes[i] == 0) {
+                decoded.direct_message_users[i].configured = false;
+                decoded.direct_message_users[i].notification_pulses = 0;
+                decoded.direct_message_users[i].send_pulses = 0;
+            }
+        }
+    }
 
     if (decoded.idle_bpm < 1 || decoded.idle_bpm > 600 || decoded.idle_delay_ms > 600000 ||
-        decoded.notification_pulses < 1 || decoded.notification_pulses > kLocalLedMaxNotificationPulses) {
+        decoded.notification_pulses < 1 || decoded.notification_pulses > kLocalLedMaxNotificationPulses ||
+        decoded.send_pulses < 1 || decoded.send_pulses > kLocalLedMaxNotificationPulses) {
         return false;
     }
     for (size_t i = 0; i < 8; ++i) {
-        if (decoded.channels[i].notification_pulses > kLocalLedMaxNotificationPulses) {
+        if (decoded.channels[i].notification_pulses > kLocalLedMaxNotificationPulses ||
+            decoded.channels[i].send_pulses > kLocalLedMaxNotificationPulses) {
+            return false;
+        }
+    }
+    if (decoded.direct_message.notification_pulses > kLocalLedMaxNotificationPulses ||
+        decoded.direct_message.send_pulses > kLocalLedMaxNotificationPulses) {
+        return false;
+    }
+    for (size_t i = 0; i < kLocalLedDirectMessageUserCapacity; ++i) {
+        if (decoded.direct_message_users[i].notification_pulses > kLocalLedMaxNotificationPulses ||
+            decoded.direct_message_users[i].send_pulses > kLocalLedMaxNotificationPulses) {
             return false;
         }
     }
@@ -418,6 +530,16 @@ bool LocalLedConfigStore::handleCommand(const char *text, const LocalLedCommandC
         save();
     }
 
+#ifdef HAS_HEARTBEAT_NEOPIXELS
+    if (heartbeatPixelThread) {
+        if (strncmp(localResult.response, "OK", 2) == 0) {
+            heartbeatPixelThread->enqueueCommandStatusPattern(true);
+        } else if (strncmp(localResult.response, "ERR", 3) == 0) {
+            heartbeatPixelThread->enqueueCommandStatusPattern(false);
+        }
+    }
+#endif
+
     *result = localResult;
     return localResult.handled;
 }
@@ -459,6 +581,7 @@ LocalLedEffectiveConfig LocalLedConfigStore::getEffectiveConfigForChannel(uint8_
         snapshot.idle_bpm,
         snapshot.idle_delay_ms,
         snapshot.notification_pulses,
+        snapshot.send_pulses,
         false,
         resolvedChannel,
     };
@@ -467,6 +590,93 @@ LocalLedEffectiveConfig LocalLedConfigStore::getEffectiveConfigForChannel(uint8_
         effective.led2_color = snapshot.channels[resolvedChannel].led2_color;
         if (snapshot.channels[resolvedChannel].notification_pulses > 0) {
             effective.notification_pulses = snapshot.channels[resolvedChannel].notification_pulses;
+        }
+        if (snapshot.channels[resolvedChannel].send_pulses > 0) {
+            effective.send_pulses = snapshot.channels[resolvedChannel].send_pulses;
+        }
+        effective.configured = true;
+    }
+    return effective;
+}
+
+LocalLedEffectiveConfig LocalLedConfigStore::getEffectiveConfigForDirectMessage() const
+{
+    CustomLedConfig snapshot = {};
+    {
+        concurrency::LockGuard guard(&lock);
+        snapshot = config;
+    }
+
+    LocalLedEffectiveConfig effective = {
+        snapshot.node_led1_color,
+        snapshot.node_led2_color,
+        snapshot.idle_bpm,
+        snapshot.idle_delay_ms,
+        snapshot.notification_pulses,
+        snapshot.send_pulses,
+        false,
+        kLocalLedDirectMessageIndex,
+    };
+    if (snapshot.direct_message.configured) {
+        effective.led1_color = snapshot.direct_message.led1_color;
+        effective.led2_color = snapshot.direct_message.led2_color;
+        if (snapshot.direct_message.notification_pulses > 0) {
+            effective.notification_pulses = snapshot.direct_message.notification_pulses;
+        }
+        if (snapshot.direct_message.send_pulses > 0) {
+            effective.send_pulses = snapshot.direct_message.send_pulses;
+        }
+        effective.configured = true;
+    }
+    return effective;
+}
+
+LocalLedEffectiveConfig LocalLedConfigStore::getEffectiveConfigForDirectMessage(uint32_t nodeNum) const
+{
+    CustomLedConfig snapshot = {};
+    {
+        concurrency::LockGuard guard(&lock);
+        snapshot = config;
+    }
+
+    LocalLedEffectiveConfig effective = {
+        snapshot.node_led1_color,
+        snapshot.node_led2_color,
+        snapshot.idle_bpm,
+        snapshot.idle_delay_ms,
+        snapshot.notification_pulses,
+        snapshot.send_pulses,
+        false,
+        kLocalLedDirectMessageIndex,
+    };
+    const ChannelLedConfig *dmConfig = snapshot.direct_message.configured ? &snapshot.direct_message : nullptr;
+    int8_t userSlot = -1;
+    for (size_t i = 0; i < kLocalLedDirectMessageUserCapacity; ++i) {
+        if (snapshot.direct_message_nodes[i] == nodeNum) {
+            userSlot = (int8_t)i;
+            if (snapshot.direct_message_users[i].configured) {
+                dmConfig = &snapshot.direct_message_users[i];
+            }
+            break;
+        }
+    }
+    if (dmConfig) {
+        effective.led1_color = dmConfig->led1_color;
+        effective.led2_color = dmConfig->led2_color;
+        if (userSlot >= 0) {
+            effective.channel_index = kLocalLedDirectMessageUserBaseIndex + (uint8_t)userSlot;
+        }
+        if (userSlot >= 0 && snapshot.direct_message_users[userSlot].notification_pulses > 0) {
+            effective.notification_pulses = snapshot.direct_message_users[userSlot].notification_pulses;
+        }
+        if (userSlot >= 0 && snapshot.direct_message_users[userSlot].send_pulses > 0) {
+            effective.send_pulses = snapshot.direct_message_users[userSlot].send_pulses;
+        }
+        if (dmConfig->notification_pulses > 0 && !(userSlot >= 0 && snapshot.direct_message_users[userSlot].notification_pulses > 0)) {
+            effective.notification_pulses = dmConfig->notification_pulses;
+        }
+        if (dmConfig->send_pulses > 0 && !(userSlot >= 0 && snapshot.direct_message_users[userSlot].send_pulses > 0)) {
+            effective.send_pulses = dmConfig->send_pulses;
         }
         effective.configured = true;
     }
@@ -478,7 +688,8 @@ LocalLedEffectiveConfig LocalLedConfigStore::getEffectiveConfigForActiveChannel(
     return getEffectiveConfigForChannel(getActiveChannel());
 }
 
-meshtastic_MeshPacket *LocalLedConfigStore::createLocalReplyPacket(const char *text, uint8_t channel, uint32_t requestId) const
+meshtastic_MeshPacket *LocalLedConfigStore::createLocalReplyPacket(const char *text, uint8_t channel, uint32_t requestId,
+                                                                   uint32_t from, uint32_t to) const
 {
     if (!text) {
         return nullptr;
@@ -491,8 +702,8 @@ meshtastic_MeshPacket *LocalLedConfigStore::createLocalReplyPacket(const char *t
 
     packet->which_payload_variant = meshtastic_MeshPacket_decoded_tag;
     packet->id = generatePacketId();
-    packet->from = nodeDB->getNodeNum();
-    packet->to = NODENUM_BROADCAST;
+    packet->from = from;
+    packet->to = to;
     packet->channel = isSupportedChannel(channel) ? channel : channels.getPrimaryIndex();
     packet->rx_time = getValidTime(RTCQualityFromNet);
     packet->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
@@ -581,6 +792,8 @@ bool handleLocalLedPhoneCommand(const meshtastic_MeshPacket &packet, meshtastic_
     LocalLedCommandContext context = {
         localLedResolveIncomingChannel(packet, &resolvedChannel),
         resolvedChannel,
+        packet.to != 0 && !isBroadcast(packet.to),
+        packet.to,
         true,
         packet.id,
         resolvedChannel,
@@ -598,7 +811,14 @@ bool handleLocalLedPhoneCommand(const meshtastic_MeshPacket &packet, meshtastic_
     }
 
     if (replyPacket && result.response[0] != '\0') {
-        *replyPacket = localLedConfigStore->createLocalReplyPacket(result.response, context.reply_channel, packet.id);
+        uint32_t localNode = nodeDB->getNodeNum();
+        uint32_t replyFrom = kLocalLedCommandBotNode;
+        uint32_t replyTo = NODENUM_BROADCAST;
+        if (context.has_direct_message_peer && context.direct_message_peer != localNode) {
+            replyFrom = context.direct_message_peer;
+            replyTo = localNode;
+        }
+        *replyPacket = localLedConfigStore->createLocalReplyPacket(result.response, context.reply_channel, packet.id, replyFrom, replyTo);
     }
 
     return true;

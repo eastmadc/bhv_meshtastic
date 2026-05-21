@@ -13,6 +13,9 @@
 #include "RTC.h"
 #include "TypeConversions.h"
 #include "led/LocalLedConfig.h"
+#ifdef HAS_HEARTBEAT_NEOPIXELS
+#include "HeartbeatPixelThread.h"
+#endif
 #include "graphics/draw/MessageRenderer.h"
 #include "main.h"
 #include "mesh-pb-constants.h"
@@ -205,6 +208,20 @@ void MeshService::handleToRadio(meshtastic_MeshPacket &p)
         }
         return;
     }
+
+#ifdef HAS_HEARTBEAT_NEOPIXELS
+    if (heartbeatPixelThread && p.which_payload_variant == meshtastic_MeshPacket_decoded_tag && MeshService::isTextPayload(&p) &&
+        p.decoded.payload.size > 0) {
+        if (p.to != 0 && !isBroadcast(p.to)) {
+            heartbeatPixelThread->enqueueDirectMessageSendNotification(p.to);
+        } else {
+            uint8_t resolvedChannel = 0;
+            if (localLedResolveIncomingChannel(p, &resolvedChannel)) {
+                heartbeatPixelThread->enqueueChannelSendNotification(resolvedChannel);
+            }
+        }
+    }
+#endif
 
     IF_SCREEN(if (p.decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP && p.decoded.payload.size > 0 &&
                   p.to != NODENUM_BROADCAST && p.to != 0) // DM only

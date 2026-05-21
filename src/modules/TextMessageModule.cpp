@@ -29,7 +29,11 @@ ProcessMessage TextMessageModule::handleReceived(const meshtastic_MeshPacket &mp
     if (localLedConfigStore && localLedResolveIncomingChannel(mp, &resolvedChannel)) {
 #ifdef HAS_HEARTBEAT_NEOPIXELS
         if (heartbeatPixelThread && !isFromUs(&mp)) {
-            heartbeatPixelThread->enqueueChannelNotification(resolvedChannel);
+            if (isToUs(&mp) && !isBroadcast(mp.to)) {
+                heartbeatPixelThread->enqueueDirectMessageNotification(mp.from);
+            } else {
+                heartbeatPixelThread->enqueueChannelNotification(resolvedChannel);
+            }
         }
 #endif
     }
