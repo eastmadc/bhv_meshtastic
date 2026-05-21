@@ -7,7 +7,7 @@
 #include "concurrency/OSThread.h"
 #include "concurrency/Lock.h"
 #include "sleep.h"
-#include <Adafruit_NeoPixel.h>
+#include <esp32-hal-rmt.h>
 
 #ifndef HEARTBEAT_NEOPIXEL_COUNT_PER_STRIP
 #define HEARTBEAT_NEOPIXEL_COUNT_PER_STRIP 7
@@ -94,6 +94,9 @@ class HeartbeatPixelThread : private concurrency::OSThread
     static constexpr uint8_t kPatternQueueSize = 4;
     static constexpr uint8_t kLed1SequenceLength = 7;
     static constexpr uint8_t kLed2SequenceLength = 7;
+    static constexpr uint8_t kBytesPerLed = 3;
+    static constexpr uint8_t kRmtItemsPerByte = 8;
+    static constexpr uint8_t kRmtItemsPerLed = kBytesPerLed * kRmtItemsPerByte;
     static constexpr double kInactiveSequenceOffset = -1.0;
     static const float kPixelMinBrightness[kLedCount];
     static const float kPixelMaxBrightness[kLedCount];
@@ -102,7 +105,8 @@ class HeartbeatPixelThread : private concurrency::OSThread
     static const uint8_t kLed1NotificationSequence[kLed1SequenceLength];
     static const uint8_t kLed2NotificationSequence[kLed2SequenceLength];
 
-    Adafruit_NeoPixel pixels;
+    rmt_obj_t *rmtTx = nullptr;
+    rmt_data_t rmtFrame[kLedCount * kRmtItemsPerLed] = {};
     mutable concurrency::Lock notificationLock;
     PendingNotification notificationQueue[kNotificationQueueSize];
     PatternEvent patternQueue[kPatternQueueSize];
@@ -161,6 +165,8 @@ class HeartbeatPixelThread : private concurrency::OSThread
     float calculateBrightness(double cycleTimeMs, double currentTimeMs, double startTimeMs, double pulseWidthMs) const;
     void syncBpm(uint32_t nowMs);
     void setPixel(uint8_t index, const RgbColor &color, float brightness);
+    void encodePixel(uint8_t index, uint8_t red, uint8_t green, uint8_t blue);
+    static void encodeByteToRmt(uint8_t value, rmt_data_t *dest);
     static RgbColor colorFromHex(uint32_t color);
     void showStrips();
     void clearStrips();

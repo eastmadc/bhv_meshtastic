@@ -64,8 +64,7 @@ const uint8_t HeartbeatPixelThread::kLed2NotificationSequence[HeartbeatPixelThre
 };
 
 HeartbeatPixelThread::HeartbeatPixelThread()
-    : concurrency::OSThread("HeartbeatPixels", kAnimationIntervalMs),
-      pixels(kLedCount, HEARTBEAT_NEOPIXEL_LEFT_PIN, HEARTBEAT_NEOPIXEL_TYPE)
+    : concurrency::OSThread("HeartbeatPixels", kAnimationIntervalMs)
 {
     heartbeatPixelThread = this;
     notifyDeepSleepObserver.observe(&notifyDeepSleep);
@@ -75,6 +74,9 @@ int32_t HeartbeatPixelThread::runOnce()
 {
     if (!initialized) {
         initializeHardware();
+        if (!initialized) {
+            return kAnimationIntervalMs;
+        }
         startupStartMs = millis();
     }
 
@@ -159,7 +161,19 @@ long HeartbeatPixelThread::tillRun(unsigned long time)
 void HeartbeatPixelThread::initializeHardware()
 {
     powerStrips(true);
-    pixels.begin();
+    const rmt_reserve_memsize_t rmtMemOptions[] = {RMT_MEM_256, RMT_MEM_192, RMT_MEM_128, RMT_MEM_64};
+    for (const rmt_reserve_memsize_t memSize : rmtMemOptions) {
+        rmtTx = rmtInit(HEARTBEAT_NEOPIXEL_LEFT_PIN, RMT_TX_MODE, memSize);
+        if (rmtTx) {
+            break;
+        }
+    }
+    if (!rmtTx) {
+        LOG_ERROR("HeartbeatPixels failed to initialize RMT on GPIO %d", HEARTBEAT_NEOPIXEL_LEFT_PIN);
+        powerStrips(false);
+        return;
+    }
+    rmtSetTick(rmtTx, 100.0f);
     initializeNotificationSequenceTimings();
     clearStrips();
     initialized = true;
@@ -645,20 +659,47 @@ void HeartbeatPixelThread::setPixel(uint8_t index, const RgbColor &color, float 
     const uint8_t red = (uint8_t)roundf((float)color.red * kOutputScale * scaledBrightness);
     const uint8_t green = (uint8_t)roundf((float)color.green * kOutputScale * scaledBrightness);
     const uint8_t blue = (uint8_t)roundf((float)color.blue * kOutputScale * scaledBrightness);
-    const uint32_t pixelColor = pixels.Color(red, green, blue);
-    pixels.setPixelColor(index, pixelColor);
+    encodePixel(index, red, green, blue);
+}
+
+void HeartbeatPixelThread::encodePixel(uint8_t index, uint8_t red, uint8_t green, uint8_t blue)
+{
+    if (index >= kLedCount) {
+        return;
+    }
+
+    rmt_data_t *pixel = &rmtFrame[index * kRmtItemsPerLed];
+    encodeByteToRmt(green, pixel + (0 * kRmtItemsPerByte));
+    encodeByteToRmt(red, pixel + (1 * kRmtItemsPerByte));
+    encodeByteToRmt(blue, pixel + (2 * kRmtItemsPerByte));
+}
+
+void HeartbeatPixelThread::encodeByteToRmt(uint8_t value, rmt_data_t *dest)
+{
+    for (uint8_t bit = 0; bit < kRmtItemsPerByte; ++bit) {
+        const bool one = (value & (1U << (7 - bit))) != 0;
+        dest[bit].level0 = 1;
+        dest[bit].duration0 = one ? 8 : 4;
+        dest[bit].level1 = 0;
+        dest[bit].duration1 = one ? 4 : 8;
+    }
 }
 
 void HeartbeatPixelThread::showStrips()
 {
     powerStrips(true);
-    pixels.show();
+    if (!rmtTx || !rmtWriteBlocking(rmtTx, rmtFrame, kLedCount * kRmtItemsPerLed)) {
+        LOG_WARN("HeartbeatPixels failed to write RMT frame");
+        return;
+    }
     stripsAreDark = false;
 }
 
 void HeartbeatPixelThread::clearStrips()
 {
-    pixels.clear();
+    for (uint8_t i = 0; i < kLedCount; ++i) {
+        encodePixel(i, 0, 0, 0);
+    }
     showStrips();
     stripsAreDark = true;
 }
@@ -691,6 +732,11 @@ int HeartbeatPixelThread::handleDeepSleep(void *unused)
         clearStrips();
     }
     powerStrips(false);
+    if (rmtTx) {
+        rmtDeinit(rmtTx);
+        rmtTx = nullptr;
+    }
+    initialized = false;
     return 0;
 }
 
