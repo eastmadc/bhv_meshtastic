@@ -992,6 +992,21 @@ bool MAX30102Sensor::isActive()
     return sensorActive;
 }
 
+uint8_t MAX30102Sensor::getSensitivity() const
+{
+    return max30102ActiveLedPower;
+}
+
+uint8_t MAX30102Sensor::getMaxSensitivity() const
+{
+    return MAX30102_LED_POWER_ACTIVE_MAX;
+}
+
+void MAX30102Sensor::setSensitivity(uint8_t level)
+{
+    setMAX30102LedPower(level);
+}
+
 bool MAX30102Sensor::isHrEngaged() const
 {
     if (chipType == PulseOxChipType::MAX30102) {

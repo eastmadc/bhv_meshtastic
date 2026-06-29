@@ -27,7 +27,8 @@ static constexpr size_t kV5SerializedSize = 103;
 static constexpr size_t kV6SerializedSize = 113;
 static constexpr size_t kV7SerializedSize = 253;
 static constexpr size_t kSerializedSize = 273;
-static constexpr uint32_t kLocalReplyDelayMs = 500;
+static constexpr uint32_t kLocalReplyDelayMs = 0;
+static constexpr uint32_t kLocalReplyTimestampOffsetSecs = 1;
 static constexpr uint32_t kLocalLedCommandBotNode = 0x4C454421; // !4C454421, "LED!"
 
 class LocalLedReplyDispatcher : private concurrency::OSThread
@@ -705,7 +706,7 @@ meshtastic_MeshPacket *LocalLedConfigStore::createLocalReplyPacket(const char *t
     packet->from = from;
     packet->to = to;
     packet->channel = isSupportedChannel(channel) ? channel : channels.getPrimaryIndex();
-    packet->rx_time = getValidTime(RTCQualityFromNet);
+    packet->rx_time = getValidTime(RTCQualityFromNet) + kLocalReplyTimestampOffsetSecs;
     packet->decoded.portnum = meshtastic_PortNum_TEXT_MESSAGE_APP;
     packet->decoded.request_id = requestId;
 

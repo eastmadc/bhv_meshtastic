@@ -199,6 +199,9 @@ class MAX30102Sensor : public TelemetrySensor
     void prepareDeepSleep();
     bool serviceSensor();
     bool getRawWaveformSnapshot(uint32_t *irOut, uint32_t *redOut, uint16_t capacity, uint16_t *countOut);
+    uint8_t getSensitivity() const;
+    uint8_t getMaxSensitivity() const;
+    void setSensitivity(uint8_t level);
     /** True when finger is detected and sensor is in active HR mode (for UI auto-navigate). */
     bool isHrEngaged() const;
 };

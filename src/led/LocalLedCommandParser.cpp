@@ -1,5 +1,9 @@
 #include "led/LocalLedCommandParser.h"
 
+#if !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY && !defined(ARCH_PORTDUINO)
+#include "modules/Telemetry/HealthTelemetry.h"
+#endif
+
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -21,10 +25,10 @@ static const NamedColor kNamedColors[] = {
 };
 
 static const char *kHelpText =
-    "help: #! get node|ch|dm [field]; #! set node|ch|dm <field> <value>; #! clear ch|dm <field>. Try: #! help dm, "
+    "help: #! get default|ch|dm|hr [field]; #! set default|ch|dm|hr <field> <value>; #! clear ch|dm <field>. Try: #! help dm, "
     "#! help colors";
 static const char *kNodeHelpText =
-    "node: get [color|idle_bpm|idle_delay|notify_pulses|send_pulses]; set color <c1> [c2]; set idle_bpm <1-600>; "
+    "default: get [color|idle_bpm|idle_delay|notify_pulses|send_pulses]; set color <c1> [c2]; set idle_bpm <1-600>; "
     "set idle_delay <0-600000>; set notify_pulses <1-20>; set send_pulses <1-20>";
 static const char *kChannelHelpText =
     "ch: get [n] [color|notify_pulses|send_pulses]; set [n] color <c1> [c2]; set [n] notify_pulses|send_pulses "
@@ -32,27 +36,42 @@ static const char *kChannelHelpText =
 static const char *kDirectMessageHelpText =
     "dm: get [color|notify_pulses|send_pulses]; set color <c1> [c2]; set notify_pulses|send_pulses <0-20>; list dm; "
     "clear color|notify_pulses|send_pulses|all|<slot>";
+static const char *kHeartRateHelpText =
+    "hr: get sensitivity; set sensitivity low|medium|high|default|<1-79>. Higher values increase MAX3010x LED drive";
 static const char *kGetHelpText =
-    "get: #! get node [color|idle_bpm|idle_delay|notify_pulses|send_pulses]; #! get ch [n] "
-    "[color|notify_pulses|send_pulses]; #! get dm [color|notify_pulses|send_pulses]";
+    "get: #! get default [color|idle_bpm|idle_delay|notify_pulses|send_pulses]; #! get ch [n] "
+    "[color|notify_pulses|send_pulses]; #! get dm [color|notify_pulses|send_pulses]; #! get hr sensitivity";
 static const char *kSetHelpText =
-    "set: node color|idle_bpm|idle_delay|notify_pulses|send_pulses; ch [n] color|notify_pulses|send_pulses; dm "
-    "color|notify_pulses|send_pulses";
+    "set: default color|idle_bpm|idle_delay|notify_pulses|send_pulses; ch [n] color|notify_pulses|send_pulses; dm "
+    "color|notify_pulses|send_pulses; hr sensitivity";
 static const char *kClearHelpText =
     "clear: #! clear ch [n] color|notify_pulses|send_pulses; #! clear dm color|notify_pulses|send_pulses|all|<slot>";
 static const char *kColorHelpText =
-    "color: set node color <c1> [c2]; set ch [n] color <c1> [c2]; set dm color <c1> [c2]. led is accepted as an alias";
+    "color: set default color <c1> [c2]; set ch [n] color <c1> [c2]; set dm color <c1> [c2]. led is accepted as an alias";
 static const char *kNotifyPulsesHelpText =
-    "notify_pulses: node <1-20>; ch [n] <0-20>; dm <0-20>. 0 uses node default for ch/dm";
+    "notify_pulses: default <1-20>; ch [n] <0-20>; dm <0-20>. 0 uses default for ch/dm";
 static const char *kSendPulsesHelpText =
-    "send_pulses: node <1-20>; ch [n] <0-20>; dm <0-20>. 0 uses node default for ch/dm";
+    "send_pulses: default <1-20>; ch [n] <0-20>; dm <0-20>. 0 uses default for ch/dm";
 static const char *kColorsText =
     "colors: red orange yellow green blue indigo violet purple pink white warmwhite cyan magenta teal lime amber gold off or "
     "#RRGGBB";
 
-bool isCommandPrefix(const char *text)
+size_t commandPrefixLength(const char *text)
 {
-    return text && text[0] == '#' && text[1] == '!';
+    if (!text) {
+        return 0;
+    }
+    if (text[0] == '#' && text[1] == '!') {
+        return 2;
+    }
+    if (text[0] == '<' && text[1] == '3') {
+        return 2;
+    }
+    static const char kAnatomicalHeartPrefix[] = "\xF0\x9F\xAB\x80";
+    if (strncmp(text, kAnatomicalHeartPrefix, sizeof(kAnatomicalHeartPrefix) - 1) == 0) {
+        return sizeof(kAnatomicalHeartPrefix) - 1;
+    }
+    return 0;
 }
 
 void setResponse(LocalLedCommandResult *result, bool persist, const char *format, ...)
@@ -81,6 +100,11 @@ bool isColorField(const char *text)
     return text && (strcasecmp(text, "color") == 0 || strcasecmp(text, "led") == 0);
 }
 
+bool isDefaultScope(const char *text)
+{
+    return text && (strcasecmp(text, "default") == 0 || strcasecmp(text, "node") == 0);
+}
+
 bool isContextualScopedField(const char *text)
 {
     return isColorField(text) || strcasecmp(text, "notify_pulses") == 0 || strcasecmp(text, "send_pulses") == 0;
@@ -105,7 +129,7 @@ bool setHelpForTopic(const char *topic, LocalLedCommandResult *result)
         setResponse(result, false, "%s", kHelpText);
         return true;
     }
-    if (strcasecmp(topic, "node") == 0) {
+    if (isDefaultScope(topic)) {
         setResponse(result, false, "%s", kNodeHelpText);
         return true;
     }
@@ -115,6 +139,11 @@ bool setHelpForTopic(const char *topic, LocalLedCommandResult *result)
     }
     if (strcasecmp(topic, "dm") == 0 || strcasecmp(topic, "direct") == 0) {
         setResponse(result, false, "%s", kDirectMessageHelpText);
+        return true;
+    }
+    if (strcasecmp(topic, "hr") == 0 || strcasecmp(topic, "heart") == 0 || strcasecmp(topic, "heartrate") == 0 ||
+        strcasecmp(topic, "heart_rate") == 0) {
+        setResponse(result, false, "%s", kHeartRateHelpText);
         return true;
     }
     if (strcasecmp(topic, "get") == 0) {
@@ -147,6 +176,10 @@ bool setHelpForTopic(const char *topic, LocalLedCommandResult *result)
     }
     if (strcasecmp(topic, "send_pulses") == 0) {
         setResponse(result, false, "%s", kSendPulsesHelpText);
+        return true;
+    }
+    if (strcasecmp(topic, "sensitivity") == 0) {
+        setResponse(result, false, "%s", kHeartRateHelpText);
         return true;
     }
     return false;
@@ -399,8 +432,8 @@ void handleNodeGet(const CustomLedConfig &config, uint8_t argc, char *argv[], Lo
     formatColor(led2, sizeof(led2), config.node_led2_color);
 
     if (argc == 0) {
-        setResponse(result, false, "node color color1=%s color2=%s idle_bpm=%u idle_delay=%lu notify_pulses=%u send_pulses=%u", led1,
-                    led2, config.idle_bpm, (unsigned long)config.idle_delay_ms, config.notification_pulses, config.send_pulses);
+        setResponse(result, false, "default color color1=%s color2=%s idle_bpm=%u idle_delay=%lu notify_pulses=%u send_pulses=%u",
+                    led1, led2, config.idle_bpm, (unsigned long)config.idle_delay_ms, config.notification_pulses, config.send_pulses);
         return;
     }
     if (argc != 1) {
@@ -408,23 +441,23 @@ void handleNodeGet(const CustomLedConfig &config, uint8_t argc, char *argv[], Lo
         return;
     }
     if (isColorField(argv[0])) {
-        setResponse(result, false, "node color color1=%s color2=%s", led1, led2);
+        setResponse(result, false, "default color color1=%s color2=%s", led1, led2);
         return;
     }
     if (strcasecmp(argv[0], "idle_bpm") == 0) {
-        setResponse(result, false, "node idle_bpm=%u", config.idle_bpm);
+        setResponse(result, false, "default idle_bpm=%u", config.idle_bpm);
         return;
     }
     if (strcasecmp(argv[0], "idle_delay") == 0) {
-        setResponse(result, false, "node idle_delay=%lu", (unsigned long)config.idle_delay_ms);
+        setResponse(result, false, "default idle_delay=%lu", (unsigned long)config.idle_delay_ms);
         return;
     }
     if (strcasecmp(argv[0], "notify_pulses") == 0) {
-        setResponse(result, false, "node notify_pulses=%u", config.notification_pulses);
+        setResponse(result, false, "default notify_pulses=%u", config.notification_pulses);
         return;
     }
     if (strcasecmp(argv[0], "send_pulses") == 0) {
-        setResponse(result, false, "node send_pulses=%u", config.send_pulses);
+        setResponse(result, false, "default send_pulses=%u", config.send_pulses);
         return;
     }
     setUnknown(result);
@@ -467,14 +500,14 @@ void handleNodeSet(CustomLedConfig &config, uint8_t argc, char *argv[], LocalLed
         char led2[8] = {};
         formatColor(led1, sizeof(led1), config.node_led1_color);
         formatColor(led2, sizeof(led2), config.node_led2_color);
-        setResponse(result, true, "OK node color color1=%s color2=%s", led1, led2);
+        setResponse(result, true, "OK default color color1=%s color2=%s", led1, led2);
         return;
     }
 
     if (strcasecmp(argv[0], "idle_bpm") == 0) {
         uint32_t value = 0;
         if (argc == 2 && isHelpToken(argv[1])) {
-            setResponse(result, false, "idle_bpm: #! set node idle_bpm <1-600>");
+            setResponse(result, false, "idle_bpm: #! set default idle_bpm <1-600>");
             return;
         }
         if (argc == 1) {
@@ -486,14 +519,14 @@ void handleNodeSet(CustomLedConfig &config, uint8_t argc, char *argv[], LocalLed
             return;
         }
         config.idle_bpm = (uint16_t)value;
-        setResponse(result, true, "OK node idle_bpm=%u", config.idle_bpm);
+        setResponse(result, true, "OK default idle_bpm=%u", config.idle_bpm);
         return;
     }
 
     if (strcasecmp(argv[0], "idle_delay") == 0) {
         uint32_t value = 0;
         if (argc == 2 && isHelpToken(argv[1])) {
-            setResponse(result, false, "idle_delay: #! set node idle_delay <0-600000>");
+            setResponse(result, false, "idle_delay: #! set default idle_delay <0-600000>");
             return;
         }
         if (argc == 1) {
@@ -505,7 +538,7 @@ void handleNodeSet(CustomLedConfig &config, uint8_t argc, char *argv[], LocalLed
             return;
         }
         config.idle_delay_ms = value;
-        setResponse(result, true, "OK node idle_delay=%lu", (unsigned long)config.idle_delay_ms);
+        setResponse(result, true, "OK default idle_delay=%lu", (unsigned long)config.idle_delay_ms);
         return;
     }
 
@@ -524,7 +557,7 @@ void handleNodeSet(CustomLedConfig &config, uint8_t argc, char *argv[], LocalLed
             return;
         }
         config.notification_pulses = (uint8_t)value;
-        setResponse(result, true, "OK node notify_pulses=%u", config.notification_pulses);
+        setResponse(result, true, "OK default notify_pulses=%u", config.notification_pulses);
         return;
     }
 
@@ -543,7 +576,7 @@ void handleNodeSet(CustomLedConfig &config, uint8_t argc, char *argv[], LocalLed
             return;
         }
         config.send_pulses = (uint8_t)value;
-        setResponse(result, true, "OK node send_pulses=%u", config.send_pulses);
+        setResponse(result, true, "OK default send_pulses=%u", config.send_pulses);
         return;
     }
 
@@ -1114,6 +1147,101 @@ void handleDirectMessageList(const CustomLedConfig &config, LocalLedCommandResul
     }
     setResponse(result, false, "%s", response);
 }
+
+bool parseHeartRateSensitivity(const char *text, uint8_t *level)
+{
+    if (!text || !level) {
+        return false;
+    }
+    if (strcasecmp(text, "low") == 0) {
+        *level = 0x1F;
+        return true;
+    }
+    if (strcasecmp(text, "medium") == 0 || strcasecmp(text, "default") == 0) {
+        *level = 0x2F;
+        return true;
+    }
+    if (strcasecmp(text, "high") == 0) {
+        *level = 0x4F;
+        return true;
+    }
+
+    uint32_t value = 0;
+    if (!parseUnsigned(text, &value) || value < 1 || value > 0x4F) {
+        return false;
+    }
+    *level = (uint8_t)value;
+    return true;
+}
+
+bool getHeartRateSensitivity(uint8_t *level, uint8_t *maxLevel)
+{
+#if !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY && !defined(ARCH_PORTDUINO)
+    return healthTelemetryModule && healthTelemetryModule->getHeartRateSensitivity(level, maxLevel);
+#else
+    (void)level;
+    (void)maxLevel;
+    return false;
+#endif
+}
+
+bool setHeartRateSensitivity(uint8_t level)
+{
+#if !MESHTASTIC_EXCLUDE_HEALTH_TELEMETRY && !defined(ARCH_PORTDUINO)
+    return healthTelemetryModule && healthTelemetryModule->setHeartRateSensitivity(level);
+#else
+    (void)level;
+    return false;
+#endif
+}
+
+void handleHeartRateCommand(const char *verb, uint8_t argc, char *argv[], LocalLedCommandResult *result)
+{
+    if (argc == 0 || (argc == 1 && isHelpToken(argv[0]))) {
+        setResponse(result, false, "%s", kHeartRateHelpText);
+        return;
+    }
+
+    if (strcasecmp(argv[0], "sensitivity") != 0) {
+        setUnknown(result);
+        return;
+    }
+
+    if (strcasecmp(verb, "get") == 0) {
+        if (argc != 1) {
+            setUnknown(result);
+            return;
+        }
+        uint8_t level = 0;
+        uint8_t maxLevel = 0;
+        if (!getHeartRateSensitivity(&level, &maxLevel)) {
+            setResponse(result, false, "ERR hr sensor unavailable");
+            return;
+        }
+        setResponse(result, false, "hr sensitivity=%u max=%u hex=0x%02X", level, maxLevel, level);
+        return;
+    }
+
+    if (strcasecmp(verb, "set") == 0) {
+        if (argc == 2 && isHelpToken(argv[1])) {
+            setResponse(result, false, "%s", kHeartRateHelpText);
+            return;
+        }
+        uint8_t level = 0;
+        if (argc != 2 || !parseHeartRateSensitivity(argv[1], &level)) {
+            setResponse(result, false, "ERR invalid sensitivity");
+            return;
+        }
+        if (!setHeartRateSensitivity(level)) {
+            setResponse(result, false, "ERR hr sensor unavailable");
+            return;
+        }
+        setResponse(result, false, "OK hr sensitivity=%u hex=0x%02X", level, level);
+        return;
+    }
+
+    setUnknown(result);
+}
 } // namespace
 
 bool handleLocalLedCommand(CustomLedConfig &config, const LocalLedCommandContext &context, const char *text,
@@ -1124,12 +1252,13 @@ bool handleLocalLedCommand(CustomLedConfig &config, const LocalLedCommandContext
     }
 
     memset(result, 0, sizeof(*result));
-    if (!isCommandPrefix(text)) {
+    const size_t prefixLength = commandPrefixLength(text);
+    if (prefixLength == 0) {
         return false;
     }
 
     char buffer[256] = {};
-    strncpy(buffer, text + 2, sizeof(buffer) - 1);
+    strncpy(buffer, text + prefixLength, sizeof(buffer) - 1);
     char *tokens[8] = {};
     const uint8_t tokenCount = tokenize(buffer, tokens, 8);
     if (tokenCount == 0) {
@@ -1180,7 +1309,7 @@ bool handleLocalLedCommand(CustomLedConfig &config, const LocalLedCommandContext
         }
     }
 
-    if (strcasecmp(scope, "node") == 0) {
+    if (isDefaultScope(scope)) {
         if (argc == 1 && isHelpToken(argv[0])) {
             if (!setHelpForTopic(verb, result)) {
                 setResponse(result, false, "%s", kNodeHelpText);
@@ -1250,6 +1379,12 @@ bool handleLocalLedCommand(CustomLedConfig &config, const LocalLedCommandContext
             return true;
         }
         setUnknown(result);
+        return true;
+    }
+
+    if (strcasecmp(scope, "hr") == 0 || strcasecmp(scope, "heart") == 0 || strcasecmp(scope, "heartrate") == 0 ||
+        strcasecmp(scope, "heart_rate") == 0) {
+        handleHeartRateCommand(verb, argc, argv, result);
         return true;
     }
 

@@ -55,20 +55,47 @@ static void test_parser_ignores_non_command_text()
     TEST_ASSERT_FALSE(handleLocalLedCommand(config, makeContext(), "hello world", &result));
 }
 
-static void test_set_node_led_and_get_node()
+static void test_set_default_led_and_get_default()
 {
     CustomLedConfig config = {};
     LocalLedConfigStore::applyDefaults(&config);
     LocalLedCommandResult result = {};
 
-    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! set node led red blue", &result));
+    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! set default led red blue", &result));
     TEST_ASSERT_TRUE(result.handled);
     TEST_ASSERT_TRUE(result.persist);
-    TEST_ASSERT_EQUAL_STRING("OK node led led1=#FF0000 led2=#0000FF", result.response);
+    TEST_ASSERT_EQUAL_STRING("OK default color color1=#FF0000 color2=#0000FF", result.response);
 
     memset(&result, 0, sizeof(result));
-    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! get node", &result));
-    TEST_ASSERT_EQUAL_STRING("node led led1=#FF0000 led2=#0000FF idle_bpm=80 idle_delay=0", result.response);
+    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! get default", &result));
+    TEST_ASSERT_EQUAL_STRING("default color color1=#FF0000 color2=#0000FF idle_bpm=80 idle_delay=0 notify_pulses=3 send_pulses=1",
+                             result.response);
+}
+
+static void test_command_prefix_aliases()
+{
+    CustomLedConfig config = {};
+    LocalLedConfigStore::applyDefaults(&config);
+    LocalLedCommandResult result = {};
+    static const char anatomicalHeartPrefix[] = "\xF0\x9F\xAB\x80";
+
+    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), anatomicalHeartPrefix " set default led green", &result));
+    TEST_ASSERT_TRUE(result.persist);
+    TEST_ASSERT_EQUAL_STRING("OK default color color1=#00FF00 color2=#00FF00", result.response);
+
+    memset(&result, 0, sizeof(result));
+    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "<3 get default led", &result));
+    TEST_ASSERT_EQUAL_STRING("default color color1=#00FF00 color2=#00FF00", result.response);
+}
+
+static void test_node_scope_remains_compatible_alias()
+{
+    CustomLedConfig config = {};
+    LocalLedConfigStore::applyDefaults(&config);
+    LocalLedCommandResult result = {};
+
+    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! set node color cyan", &result));
+    TEST_ASSERT_EQUAL_STRING("OK default color color1=#00FFFF color2=#00FFFF", result.response);
 }
 
 static void test_set_channel_led_with_resolved_channel_and_clear()
@@ -78,16 +105,19 @@ static void test_set_channel_led_with_resolved_channel_and_clear()
     LocalLedCommandResult result = {};
 
     TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(true, 5), "#! set ch led amber", &result));
-    TEST_ASSERT_EQUAL_STRING("OK ch=5 led led1=#FFBF00 led2=#FFBF00", result.response);
+    TEST_ASSERT_EQUAL_STRING("OK ch=5 color color1=#FFBF00 color2=#FFBF00", result.response);
     TEST_ASSERT_TRUE(config.channels[5].configured);
 
     memset(&result, 0, sizeof(result));
     TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(true, 5), "#! get ch", &result));
-    TEST_ASSERT_EQUAL_STRING("ch=5 led led1=#FFBF00 led2=#FFBF00 configured=true", result.response);
+    TEST_ASSERT_EQUAL_STRING(
+        "ch=5 color color1=#FFBF00 color2=#FFBF00 configured=true notify_pulses=3 notify_override=false send_pulses=1 "
+        "send_override=false",
+        result.response);
 
     memset(&result, 0, sizeof(result));
     TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(true, 5), "#! clear ch led", &result));
-    TEST_ASSERT_EQUAL_STRING("OK ch=5 led cleared", result.response);
+    TEST_ASSERT_EQUAL_STRING("OK ch=5 color cleared", result.response);
     TEST_ASSERT_FALSE(config.channels[5].configured);
 }
 
@@ -100,7 +130,10 @@ static void test_explicit_channel_and_fallback_get()
     LocalLedCommandResult result = {};
 
     TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(true, 1), "#! get ch 2", &result));
-    TEST_ASSERT_EQUAL_STRING("ch=2 led led1=#00AA00 led2=#AA00AA configured=false", result.response);
+    TEST_ASSERT_EQUAL_STRING(
+        "ch=2 color color1=#00AA00 color2=#AA00AA configured=false notify_pulses=3 notify_override=false send_pulses=1 "
+        "send_override=false",
+        result.response);
 }
 
 static void test_help_and_colors_output()
@@ -111,8 +144,8 @@ static void test_help_and_colors_output()
 
     TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! help", &result));
     TEST_ASSERT_EQUAL_STRING(
-        "#! set node led <c1> [c2]\n#! get node [led|idle_bpm|idle_delay]\n#! set node idle_bpm <n>\n#! set node idle_delay "
-        "<ms>\n#! set ch [n] led <c1> [c2]\n#! get ch [n] [led]\n#! clear ch [n] led\n#! help colors",
+        "help: #! get default|ch|dm|hr [field]; #! set default|ch|dm|hr <field> <value>; #! clear ch|dm <field>. Try: #! help "
+        "dm, #! help colors",
         result.response);
 
     memset(&result, 0, sizeof(result));
@@ -121,6 +154,22 @@ static void test_help_and_colors_output()
         "colors: red orange yellow green blue indigo violet purple pink white warmwhite cyan magenta teal lime amber gold off or "
         "#RRGGBB",
         result.response);
+}
+
+static void test_hr_sensitivity_command_is_recognized()
+{
+    CustomLedConfig config = {};
+    LocalLedConfigStore::applyDefaults(&config);
+    LocalLedCommandResult result = {};
+
+    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! help hr", &result));
+    TEST_ASSERT_EQUAL_STRING(
+        "hr: get sensitivity; set sensitivity low|medium|high|default|<1-79>. Higher values increase MAX3010x LED drive",
+        result.response);
+
+    memset(&result, 0, sizeof(result));
+    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! get hr sensitivity", &result));
+    TEST_ASSERT_EQUAL_STRING("ERR hr sensor unavailable", result.response);
 }
 
 static void test_validation_errors()
@@ -137,15 +186,15 @@ static void test_validation_errors()
     TEST_ASSERT_EQUAL_STRING("ERR too many colors", result.response);
 
     memset(&result, 0, sizeof(result));
-    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! set node led nope", &result));
+    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! set default led nope", &result));
     TEST_ASSERT_EQUAL_STRING("ERR invalid color", result.response);
 
     memset(&result, 0, sizeof(result));
-    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! set node idle_bpm 0", &result));
+    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! set default idle_bpm 0", &result));
     TEST_ASSERT_EQUAL_STRING("ERR invalid idle_bpm", result.response);
 
     memset(&result, 0, sizeof(result));
-    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! set node idle_delay 700000", &result));
+    TEST_ASSERT_TRUE(handleLocalLedCommand(config, makeContext(), "#! set default idle_delay 700000", &result));
     TEST_ASSERT_EQUAL_STRING("ERR invalid idle_delay", result.response);
 }
 
@@ -181,7 +230,7 @@ static void test_store_effective_config_falls_back_and_overrides()
     LocalLedCommandContext context = makeContext(true, 2);
     LocalLedCommandResult result = {};
 
-    TEST_ASSERT_TRUE(testStore->handleCommand("#! set node led green purple", context, &result));
+    TEST_ASSERT_TRUE(testStore->handleCommand("#! set default led green purple", context, &result));
     TEST_ASSERT_TRUE(testStore->handleCommand("#! set ch 2 led cyan", context, &result));
 
     LocalLedEffectiveConfig channelTwo = testStore->getEffectiveConfigForChannel(2);
@@ -197,7 +246,7 @@ static void test_store_effective_config_falls_back_and_overrides()
 
 static void test_local_phone_command_helper_consumes_command()
 {
-    meshtastic_MeshPacket packet = makeTextPacket("#! set node idle_bpm 24", 4);
+    meshtastic_MeshPacket packet = makeTextPacket("#! set default idle_bpm 24", 4);
 
     TEST_ASSERT_TRUE(handleLocalLedPhoneCommand(packet, nullptr));
     TEST_ASSERT_EQUAL_UINT8(4, testStore->getActiveChannel());
@@ -221,10 +270,13 @@ void setup()
 
     UNITY_BEGIN();
     RUN_TEST(test_parser_ignores_non_command_text);
-    RUN_TEST(test_set_node_led_and_get_node);
+    RUN_TEST(test_set_default_led_and_get_default);
+    RUN_TEST(test_command_prefix_aliases);
+    RUN_TEST(test_node_scope_remains_compatible_alias);
     RUN_TEST(test_set_channel_led_with_resolved_channel_and_clear);
     RUN_TEST(test_explicit_channel_and_fallback_get);
     RUN_TEST(test_help_and_colors_output);
+    RUN_TEST(test_hr_sensitivity_command_is_recognized);
     RUN_TEST(test_validation_errors);
     RUN_TEST(test_persistence_round_trip);
     RUN_TEST(test_store_effective_config_falls_back_and_overrides);

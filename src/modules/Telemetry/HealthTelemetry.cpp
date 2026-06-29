@@ -260,6 +260,29 @@ bool HealthTelemetryModule::isHeartRateActive() const
     return max30102Sensor.hasSensor() && max30102Sensor.isHrEngaged();
 }
 
+bool HealthTelemetryModule::getHeartRateSensitivity(uint8_t *levelOut, uint8_t *maxOut) const
+{
+    if (!max30102Sensor.hasSensor()) {
+        return false;
+    }
+    if (levelOut) {
+        *levelOut = max30102Sensor.getSensitivity();
+    }
+    if (maxOut) {
+        *maxOut = max30102Sensor.getMaxSensitivity();
+    }
+    return true;
+}
+
+bool HealthTelemetryModule::setHeartRateSensitivity(uint8_t level)
+{
+    if (!max30102Sensor.hasSensor()) {
+        return false;
+    }
+    max30102Sensor.setSensitivity(level);
+    return true;
+}
+
 void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y)
 {
     // Header with battery, time, and title (same as clock)

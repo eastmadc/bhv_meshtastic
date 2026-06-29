@@ -17,8 +17,8 @@ HeartbeatPixelThread *heartbeatPixelThread = nullptr;
 // Pattern arrays are stored directly in the current physical LED order:
 // new D1..D14 = old D4, D3, D2, D1, D12, D13, D14, D7, D6, D8, D11, D5, D9, D10.
 const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::startupConfig[HeartbeatPixelThread::kLedCount] = {
-    {0.185f, 0.220f}, {0.130f, 0.220f}, {0.075f, 0.220f}, {0.020f, 0.220f}, {0.640f, 0.220f}, {0.695f, 0.220f},
-    {0.750f, 0.220f}, {0.350f, 0.220f}, {0.295f, 0.220f}, {0.420f, 0.220f}, {0.585f, 0.220f}, {0.240f, 0.220f},
+    {0.185f, 0.220f}, {0.130f, 0.220f}, {0.075f, 0.220f}, {0.020f, 0.220f}, {0.640f, 0.220f}, {0.695f, 0.250f},
+    {0.750f, 0.220f}, {0.350f, 0.220f}, {0.3225f, 0.220f}, {0.295f, 0.220f}, {0.420f, 0.220f}, {0.240f, 0.220f},
     {0.475f, 0.220f}, {0.530f, 0.220f},
 };
 
@@ -30,8 +30,8 @@ const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::originalStartup
 
 const HeartbeatPixelThread::LedPulseConfig HeartbeatPixelThread::heartbeatConfig[HeartbeatPixelThread::kLedCount] = {
     {0.2585f, 0.3041f}, {0.0985f, 0.5741f}, {0.6712f, 0.7581f}, {0.5600f, 0.7200f}, {0.5723f, 0.2860f},
-    {0.6145f, 0.2856f}, {0.6566f, 0.3256f}, {0.7100f, 0.3600f}, {0.5223f, 0.4670f}, {0.6712f, 0.7581f},
-    {0.4513f, 0.4520f}, {0.4508f, 0.4550f}, {0.0985f, 0.5741f}, {0.2589f, 0.3016f},
+    {0.6145f, 0.3256f}, {0.6566f, 0.3256f}, {0.7100f, 0.3600f}, {0.6162f, 0.4135f}, {0.5223f, 0.4670f},
+    {0.6712f, 0.7581f}, {0.4508f, 0.4550f}, {0.0985f, 0.5741f}, {0.2589f, 0.3016f},
 };
 
 // Per-LED brightness windows are stored in the current physical LED order.
@@ -41,15 +41,15 @@ const float HeartbeatPixelThread::kPixelMinBrightness[HeartbeatPixelThread::kLed
 };
 
 const float HeartbeatPixelThread::kPixelMaxBrightness[HeartbeatPixelThread::kLedCount] = {
-    0.4f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.4f, 0.4f, 0.4f, 0.5f, 0.4f, 0.4f, 0.5f,
+    0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.8f, 0.8f, 0.8f, 1.0f, 0.8f, 0.8f, 1.0f,
 };
 
 const float HeartbeatPixelThread::kPixelBrightnessRange[HeartbeatPixelThread::kLedCount] = {
-    0.4f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.4f, 0.4f, 0.4f, 0.5f, 0.4f, 0.4f, 0.5f,
+    0.8f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.8f, 0.8f, 0.8f, 1.0f, 0.8f, 0.8f, 1.0f,
 };
 
 const bool HeartbeatPixelThread::kPixelUsesLed1Color[HeartbeatPixelThread::kLedCount] = {
-    true, true, true, true, false, false, false, true, true, false, false, true, false, false,
+    true, true, true, true, false, false, false, true, true, true, false, true, false, false,
 };
 
 // Physical LED sequence for each notification color lane.
@@ -263,11 +263,13 @@ void HeartbeatPixelThread::applyFrame(double cycleTimeMs, double activeWindowMs,
     for (uint8_t i = 0; i < kLedCount; ++i) {
         const float brightness =
             calculateBrightness(cycleTimeMs, currentTimeMs, config[i].startTime * activeWindowMs, config[i].pulseWidth * activeWindowMs);
+        const bool pulseActive = brightness > 0.0f;
         const bool usesLed1Color = kPixelUsesLed1Color[i];
         const RgbColor &baseColor = usesLed1Color ? led1Color : led2Color;
         const bool useNotificationColor =
-            usesLed1Color ? notificationAppliesToPixel(led1LaneSnapshot, i, progressSnapshot)
-                          : notificationAppliesToPixel(led2LaneSnapshot, i, progressSnapshot);
+            pulseActive &&
+            (usesLed1Color ? notificationAppliesToPixel(led1LaneSnapshot, i, progressSnapshot)
+                           : notificationAppliesToPixel(led2LaneSnapshot, i, progressSnapshot));
         const RgbColor &color =
             useNotificationColor ? (usesLed1Color ? led1LaneSnapshot.color : led2LaneSnapshot.color) : baseColor;
         setPixel(i, color, (baseHeartbeatEnabled || useNotificationColor) ? brightness : 0.0f);

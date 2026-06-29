@@ -44,6 +44,8 @@ class HealthTelemetryModule : private concurrency::OSThread,
     virtual Observable<const UIFrameEvent *> *getUIFrameObservable() override { return this; }
     bool getCurrentHeartBpm(uint8_t *bpmOut) const;
     bool isHeartRateActive() const;
+    bool getHeartRateSensitivity(uint8_t *levelOut, uint8_t *maxOut) const;
+    bool setHeartRateSensitivity(uint8_t level);
 
   protected:
     /** Called to handle a particular incoming message
