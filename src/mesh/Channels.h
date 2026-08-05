@@ -92,6 +92,12 @@ class Channels
     // Returns true if any of our channels have enabled MQTT uplink or downlink
     bool anyMqttEnabled();
 
+    /**
+     * Return true if the effective, expanded PSK for a channel has the supplied SHA-256 fingerprint.
+     * This identifies a logical channel without relying on its mutable index or display name.
+     */
+    bool pskMatchesFingerprint(ChannelIndex chIndex, const uint8_t *fingerprint, size_t fingerprintLength);
+
     bool ensureLicensedOperation();
 
     bool setDefaultPresetCryptoForHash(ChannelHash channelHash);

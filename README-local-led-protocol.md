@@ -17,8 +17,8 @@ The protocol is consumed by the node itself. It is not part of the stock Meshtas
 
 - Messages beginning with `#!` are intercepted and parsed locally.
 - Supported verbs are `set`, `get`, `clear`, and `help`.
-- Supported scopes are `node` and `ch`.
-- Node settings are global defaults.
+- Supported scopes are `default`, `ch`, and `dm`. `node` is accepted as a legacy alias for `default`.
+- Default settings are global fallbacks.
 - Channel settings are per-channel LED overrides.
 - Channel commands use the incoming message channel by default unless an explicit channel number is supplied.
 - Successful mutations are persisted immediately.
@@ -44,11 +44,11 @@ typedef struct {
 
 Semantics:
 
-- `node_led1_color` and `node_led2_color` are the node-global defaults.
+- `node_led1_color` and `node_led2_color` store the defaults.
 - `channels[n]` contains a per-channel override.
 - `channels[n].configured=false` means no override is active for that channel.
-- If a channel override is not configured, rendering falls back to the node-global colors.
-- `idle_bpm` and `idle_delay_ms` are node-global.
+- If a channel override is not configured, rendering falls back to the default colors.
+- `idle_bpm` and `idle_delay_ms` are default.
 
 ## Current defaults
 
@@ -146,7 +146,7 @@ Color assignment rules:
 
 This applies to both:
 
-- node-level LED settings
+- default LED settings
 - channel-level LED settings
 
 ## Grammar
@@ -160,13 +160,13 @@ Top-level form:
 Supported forms:
 
 ```text
-#! set node led <c1> [c2]
-#! get node
-#! get node led
-#! set node idle_bpm <n>
-#! get node idle_bpm
-#! set node idle_delay <ms>
-#! get node idle_delay
+#! set default led <c1> [c2]
+#! get default
+#! get default led
+#! set default idle_bpm <n>
+#! get default idle_bpm
+#! set default idle_delay <ms>
+#! get default idle_delay
 
 #! set ch [n] led <c1> [c2]
 #! get ch
@@ -180,71 +180,71 @@ Supported forms:
 
 ## Supported commands
 
-### Node LED colors
+### Default LED colors
 
 Set:
 
 ```text
-#! set node led <color>
-#! set node led <color1> <color2>
+#! set default led <color>
+#! set default led <color1> <color2>
 ```
 
 Get:
 
 ```text
-#! get node led
+#! get default led
 ```
 
 Examples:
 
 ```text
-#! set node led green
-#! set node led red blue
-#! get node led
+#! set default led green
+#! set default led red blue
+#! get default led
 ```
 
-### Node idle BPM
+### Default idle BPM
 
 Set:
 
 ```text
-#! set node idle_bpm <value>
+#! set default idle_bpm <value>
 ```
 
 Get:
 
 ```text
-#! get node idle_bpm
+#! get default idle_bpm
 ```
 
 Range:
 
 - valid `1..600`
 
-### Node idle delay
+### Default idle delay
 
 Set:
 
 ```text
-#! set node idle_delay <ms>
+#! set default idle_delay <ms>
 ```
 
 Get:
 
 ```text
-#! get node idle_delay
+#! get default idle_delay
 ```
 
 Range:
 
 - valid `0..600000`
 
-### Node aggregate get
+### Default aggregate get
 
-Get all node settings:
+Get all default settings:
 
 ```text
-#! get node
+#! get default
 ```
 
 ### Channel LED override
@@ -293,7 +293,7 @@ Clear semantics:
 
 - clears the stored channel LED colors
 - sets `configured=false`
-- does not change node defaults
+- does not change defaults
 
 ## Response format
 
@@ -302,10 +302,10 @@ Clear semantics:
 Examples:
 
 ```text
-OK node led led1=#0000FF led2=#0000FF
+OK default led led1=#0000FF led2=#0000FF
 OK ch=3 led led1=#FF8000 led2=#8000FF
-OK node idle_bpm=30
-OK node idle_delay=1000
+OK default idle_bpm=30
+OK default idle_delay=1000
 OK ch=3 led cleared
 ```
 
@@ -314,10 +314,10 @@ OK ch=3 led cleared
 Examples:
 
 ```text
-node led led1=#0000FF led2=#FF0000
-node idle_bpm=80
-node idle_delay=0
-node led led1=#0000FF led2=#FF0000 idle_bpm=80 idle_delay=0
+default led led1=#0000FF led2=#FF0000
+default idle_bpm=80
+default idle_delay=0
+default led led1=#0000FF led2=#FF0000 idle_bpm=80 idle_delay=0
 ch=3 led led1=#FF8000 led2=#8000FF configured=true
 ch=3 led led1=#0000FF led2=#FF0000 configured=false
 ```
@@ -325,7 +325,7 @@ ch=3 led led1=#0000FF led2=#FF0000 configured=false
 Notes:
 
 - Channel `get` responses always return the effective colors for that channel.
-- If no override exists, the colors shown are the node defaults and `configured=false`.
+- If no override exists, the colors shown are the defaults and `configured=false`.
 
 ### Error responses
 
@@ -347,10 +347,10 @@ ERR no active channel
 `#! help` returns:
 
 ```text
-#! set node led <c1> [c2]
-#! get node [led|idle_bpm|idle_delay]
-#! set node idle_bpm <n>
-#! set node idle_delay <ms>
+#! set default led <c1> [c2]
+#! get default [led|idle_bpm|idle_delay]
+#! set default idle_bpm <n>
+#! set default idle_delay <ms>
 #! set ch [n] led <c1> [c2]
 #! get ch [n] [led]
 #! clear ch [n] led
@@ -406,7 +406,7 @@ The store is loaded before modules start so LED runtime state is available durin
 
 Persistence rules:
 
-- successful `set node ...` persists immediately
+- successful `set default ...` persists immediately
 - successful `set ch ...` persists immediately
 - successful `clear ch ...` persists immediately
 
@@ -432,8 +432,8 @@ These runtime brightness modifiers are not currently exposed through the `#!` pr
 ## Example session
 
 ```text
-#! get node
-node led led1=#0000FF led2=#FF0000 idle_bpm=80 idle_delay=0
+#! get default
+default led led1=#0000FF led2=#FF0000 idle_bpm=80 idle_delay=0
 
 #! set ch led amber
 OK ch=0 led led1=#FFBF00 led2=#FFBF00

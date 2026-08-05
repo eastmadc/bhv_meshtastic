@@ -7,6 +7,7 @@
 #include "RadioInterface.h"
 #include "configuration.h"
 
+#include <SHA256.h>
 #include <assert.h>
 
 #if !MESHTASTIC_EXCLUDE_MQTT
@@ -253,6 +254,30 @@ CryptoKey Channels::getKey(ChannelIndex chIndex)
     }
 
     return k;
+}
+
+bool Channels::pskMatchesFingerprint(ChannelIndex chIndex, const uint8_t *fingerprint, size_t fingerprintLength)
+{
+    if (!fingerprint || fingerprintLength != SHA256::HASH_SIZE) {
+        return false;
+    }
+
+    const CryptoKey key = getKey(chIndex);
+    if (key.length < 0) {
+        return false;
+    }
+
+    uint8_t digest[SHA256::HASH_SIZE];
+    SHA256 hash;
+    hash.reset();
+    hash.update(key.bytes, key.length);
+    hash.finalize(digest, sizeof(digest));
+
+    uint8_t difference = 0;
+    for (size_t i = 0; i < sizeof(digest); ++i) {
+        difference |= digest[i] ^ fingerprint[i];
+    }
+    return difference == 0;
 }
 
 /** Given a channel index, change to use the crypto key specified by that index

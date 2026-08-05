@@ -1,4 +1,5 @@
 #include "Router.h"
+#include "BhvInfoPolicy.h"
 #include "Channels.h"
 #include "CryptoEngine.h"
 #include "MeshRadio.h"
@@ -25,6 +26,21 @@
 
 #define MAX_RX_FROMRADIO                                                                                                         \
     4 // max number of packets destined to our queue, we dispatch packets quickly so it doesn't need to be big
+
+#if defined(USERPREFS_BHV_INFO_READ_ONLY) && USERPREFS_BHV_INFO_READ_ONLY &&                                                   \
+    (!defined(USERPREFS_BHV_ADMIN_PUBLISHER) || !USERPREFS_BHV_ADMIN_PUBLISHER)
+#define BHV_INFO_TX_GUARD_ENABLED 1
+#else
+#define BHV_INFO_TX_GUARD_ENABLED 0
+#endif
+
+#if BHV_INFO_TX_GUARD_ENABLED
+#ifndef USERPREFS_BHV_INFO_PSK_SHA256
+#error "USERPREFS_BHV_INFO_PSK_SHA256 is required when the BHV Info transmit guard is enabled"
+#endif
+static const uint8_t bhvInfoPskFingerprint[] = USERPREFS_BHV_INFO_PSK_SHA256;
+static_assert(sizeof(bhvInfoPskFingerprint) == 32, "BHV Info PSK fingerprint must be SHA-256 (32 bytes)");
+#endif
 
 // I think this is right, one packet for each of the three fifos + one packet being currently assembled for TX or RX
 // And every TX packet might have a retransmission packet or an ack alive at any moment
@@ -241,6 +257,28 @@ ErrorCode Router::sendLocal(meshtastic_MeshPacket *p, RxSource src)
     if (p->to == 0) {
         LOG_ERROR("Packet received with to: of 0!");
     }
+
+#if BHV_INFO_TX_GUARD_ENABLED
+    const bool locallyOriginatedBroadcastText = BhvInfoPolicy::shouldBlockOutgoingText(*p, isFromUs(p), true);
+    if (locallyOriginatedBroadcastText &&
+        channels.pskMatchesFingerprint(p->channel, bhvInfoPskFingerprint, sizeof(bhvInfoPskFingerprint))) {
+        LOG_WARN("Blocked locally originated text message on read-only BHV Info channel");
+        if (service) {
+            meshtastic_ClientNotification *notification = clientNotificationPool.allocZeroed();
+            notification->has_reply_id = true;
+            notification->reply_id = p->id;
+            notification->level = meshtastic_LogRecord_Level_WARNING;
+            notification->time = getValidTime(RTCQualityFromNet);
+            strncpy(notification->message, "BHV Info is read-only on attendee badges",
+                    sizeof(notification->message) - 1);
+            service->sendClientNotification(notification);
+        }
+        const meshtastic_Routing_Error error = meshtastic_Routing_Error_NOT_AUTHORIZED;
+        abortSendAndNak(error, p);
+        return error;
+    }
+#endif
+
     // No need to deliver externally if the destination is the local node
     if (isToUs(p)) {
         printPacket("Enqueued local", p);
