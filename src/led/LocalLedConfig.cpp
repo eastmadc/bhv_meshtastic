@@ -517,6 +517,20 @@ bool LocalLedConfigStore::handleCommand(const char *text, const LocalLedCommandC
         return false;
     }
 
+    // SECURITY: an over-the-air command must not silently mutate/persist this node's
+    // LED configuration. Only locally-originated commands (from the node's own
+    // connected client) may mutate, unless the operator explicitly opts in to
+    // accepting over-air LED commands (e.g. for consensual light shows). This honors
+    // local_client_origin, which was previously plumbed through the context but unused.
+    if (localResult.persist && !context.local_client_origin) {
+#if defined(USERPREFS_BHV_ACCEPT_OVER_AIR_LED) && USERPREFS_BHV_ACCEPT_OVER_AIR_LED
+        // operator has opted in: allow the over-air mutation to apply
+#else
+        localResult.persist = false;      // ignore the mutation
+        localResult.consume_packet = true; // still consume it so it is not shown as chat
+#endif
+    }
+
     {
         concurrency::LockGuard guard(&lock);
         if (context.has_resolved_incoming_channel && isSupportedChannel(context.resolved_incoming_channel)) {
