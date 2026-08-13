@@ -54,6 +54,20 @@ bool MAX30102Sensor::getRawWaveformSnapshot(uint32_t *irOut, uint32_t *redOut, u
     return true;
 }
 
+bool MAX30102Sensor::getDieTemperatureC(float *outC)
+{
+    if (!outC) {
+        return false;
+    }
+
+    concurrency::LockGuard g(&metricsLock);
+    if (!cachedHasDieTempC) {
+        return false;
+    }
+    *outC = cachedDieTempC;
+    return true;
+}
+
 void MAX30102Sensor::clearCachedMetrics()
 {
     concurrency::LockGuard g(&metricsLock);
@@ -62,15 +76,15 @@ void MAX30102Sensor::clearCachedMetrics()
     cachedHeartRate = 0;
     cachedHasSpO2 = false;
     cachedSpO2 = 0;
-    cachedHasTemperature = false;
-    cachedTemperatureC = 0.0f;
+    cachedHasDieTempC = false;
+    cachedDieTempC = 0.0f;
     cachedFingerPresent = false;
     latchedHasHeartRate = false;
     latchedHeartRate = 0;
     latchedHasSpO2 = false;
     latchedSpO2 = 0;
-    latchedHasTemperature = false;
-    latchedTemperatureC = 0.0f;
+    latchedHasDieTempC = false;
+    latchedDieTempC = 0.0f;
     lastStableHeartMs = 0;
     lastStableSpO2Ms = 0;
     lastStableTempMs = 0;
@@ -275,14 +289,14 @@ bool MAX30102Sensor::updateLowPowerPresenceCache()
     cachedHeartRate = 0;
     cachedHasSpO2 = false;
     cachedSpO2 = 0;
-    cachedHasTemperature = false;
-    cachedTemperatureC = 0.0f;
+    cachedHasDieTempC = false;
+    cachedDieTempC = 0.0f;
     latchedHasHeartRate = false;
     latchedHeartRate = 0;
     latchedHasSpO2 = false;
     latchedSpO2 = 0;
-    latchedHasTemperature = false;
-    latchedTemperatureC = 0.0f;
+    latchedHasDieTempC = false;
+    latchedDieTempC = 0.0f;
     hasHeartEma = false;
     heartEma = 0.0f;
     hasHeartOutputEma = false;
@@ -760,14 +774,14 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
             cachedHeartRate = 0;
             cachedHasSpO2 = false;
             cachedSpO2 = 0;
-            cachedHasTemperature = false;
-            cachedTemperatureC = 0.0f;
+            cachedHasDieTempC = false;
+            cachedDieTempC = 0.0f;
             latchedHasHeartRate = false;
             latchedHeartRate = 0;
             latchedHasSpO2 = false;
             latchedSpO2 = 0;
-            latchedHasTemperature = false;
-            latchedTemperatureC = 0.0f;
+            latchedHasDieTempC = false;
+            latchedDieTempC = 0.0f;
             lastStableHeartMs = 0;
             lastStableSpO2Ms = 0;
             lastStableTempMs = 0;
@@ -897,8 +911,8 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
         lastStableSpO2Ms = nowMsEval;
     }
     if (tempValid && stableHeart) {
-        latchedHasTemperature = true;
-        latchedTemperatureC = tempC;
+        latchedHasDieTempC = true;
+        latchedDieTempC = tempC;
         lastStableTempMs = nowMsEval;
     }
 
@@ -907,7 +921,7 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
     const bool spo2HoldValid =
         latchedHasSpO2 && lastStableSpO2Ms != 0 && (uint32_t)(nowMsEval - lastStableSpO2Ms) <= STABLE_VALUE_HOLD_MS;
     const bool tempHoldValid =
-        latchedHasTemperature && lastStableTempMs != 0 && (uint32_t)(nowMsEval - lastStableTempMs) <= STABLE_VALUE_HOLD_MS;
+        latchedHasDieTempC && lastStableTempMs != 0 && (uint32_t)(nowMsEval - lastStableTempMs) <= STABLE_VALUE_HOLD_MS;
 
     outputHasHeart = stableHeart || heartHoldValid;
     outputHeart = stableHeart ? smoothedHeart : (heartHoldValid ? latchedHeartRate : 0);
@@ -917,14 +931,14 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
     outputSpO2 = stableSpO2 ? filteredSpO2 : (spo2HoldValid ? latchedSpO2 : 0);
 
     outputHasTemp = (tempValid && stableHeart) || tempHoldValid;
-    outputTempC = (tempValid && stableHeart) ? tempC : (tempHoldValid ? latchedTemperatureC : 0.0f);
+    outputTempC = (tempValid && stableHeart) ? tempC : (tempHoldValid ? latchedDieTempC : 0.0f);
 
     cachedHasHeartRate = outputHasHeart;
     cachedHeartRate = outputHeart;
     cachedHasSpO2 = outputHasSpO2;
     cachedSpO2 = outputSpO2;
-    cachedHasTemperature = outputHasTemp;
-    cachedTemperatureC = outputTempC;
+    cachedHasDieTempC = outputHasTemp;
+    cachedDieTempC = outputTempC;
 
     const bool usedSpO2Hold = !stableSpO2 && spo2HoldValid;
     LOG_INFO("HR eval: hr=%d valid=%d stable=%d hr_window_count=%u step=%u hr_out=%u hold=%d", selectedHeartRate, hrValueValid,
@@ -1343,10 +1357,8 @@ bool MAX30102Sensor::getMetrics(meshtastic_Telemetry *measurement)
     bool localHasEvaluatedWindow = false;
     bool localHasHeartRate = false;
     bool localHasSpO2 = false;
-    bool localHasTemperature = false;
     uint32_t localHeartRate = 0;
     uint32_t localSpO2 = 0;
-    float localTempC = 0.0f;
 
     {
         concurrency::LockGuard g(&metricsLock);
@@ -1355,8 +1367,6 @@ bool MAX30102Sensor::getMetrics(meshtastic_Telemetry *measurement)
         localHeartRate = cachedHeartRate;
         localHasSpO2 = cachedHasSpO2;
         localSpO2 = cachedSpO2;
-        localHasTemperature = cachedHasTemperature;
-        localTempC = cachedTemperatureC;
     }
 
     if (!localHasEvaluatedWindow) {
@@ -1376,10 +1386,14 @@ bool MAX30102Sensor::getMetrics(meshtastic_Telemetry *measurement)
         measurement->variant.health_metrics.spO2 = localSpO2;
     }
 
-    measurement->variant.health_metrics.has_temperature = localHasTemperature;
-    if (localHasTemperature) {
-        measurement->variant.health_metrics.temperature = localTempC;
-    }
+    // The MAX3010x has only a DIE-temperature sensor, whose documented purpose is compensating the
+    // temperature dependence of the SpO2 subsystem (the red LED's wavelength shifts with temperature).
+    // meshtastic_HealthMetrics.temperature is documented as "Body temperature in degrees Celsius"
+    // (protobufs/meshtastic/telemetry.proto), and it leaves this badge over LoRa and MQTT into
+    // third-party clients that will render it as exactly that. A package temperature is not a body
+    // temperature, so this sensor never populates the field; it belongs solely to the MLX90614 object
+    // temperature. The die reading is retained internally for diagnostics and future R compensation.
+    measurement->variant.health_metrics.has_temperature = false;
 
     return true;
 }

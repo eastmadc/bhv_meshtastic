@@ -312,7 +312,6 @@ void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
 
     char hrStr[8] = "--";
     char spo2Str[8] = "--";
-    char tempStr[16] = "--";
 
     if (lastMeasurement.variant.health_metrics.has_heart_bpm) {
         snprintf(hrStr, sizeof(hrStr), "%u", lastMeasurement.variant.health_metrics.heart_bpm);
@@ -320,17 +319,24 @@ void HealthTelemetryModule::drawFrame(OLEDDisplay *display, OLEDDisplayUiState *
     if (lastMeasurement.variant.health_metrics.has_spO2) {
         snprintf(spo2Str, sizeof(spo2Str), "%u", lastMeasurement.variant.health_metrics.spO2);
     }
-    if (lastMeasurement.variant.health_metrics.has_temperature) {
+    // Die temperature is shown EXPLICITLY LABELLED and read from a dedicated accessor, never from the
+    // health-metrics temperature field. The MAX3010x can only measure its own package temperature, which
+    // is not a body temperature; the previous "T:33C" rendering read as hypothermia (see the badge's own
+    // promotional artwork). It stays visible because it is a genuinely useful diagnostic - it is the only
+    // in-situ measure of the thermal state that shifts the red LED's wavelength - but it may not
+    // masquerade as a vital sign.
+    char dieTempStr[16] = "";
+    float dieTempC = 0.0f;
+    if (max30102Sensor.getDieTemperatureC(&dieTempC)) {
         if (moduleConfig.telemetry.environment_display_fahrenheit) {
-            snprintf(tempStr, sizeof(tempStr), "%.0fF",
-                     UnitConversions::CelsiusToFahrenheit(lastMeasurement.variant.health_metrics.temperature));
+            snprintf(dieTempStr, sizeof(dieTempStr), " die:%.0fF", UnitConversions::CelsiusToFahrenheit(dieTempC));
         } else {
-            snprintf(tempStr, sizeof(tempStr), "%.0fC", lastMeasurement.variant.health_metrics.temperature);
+            snprintf(dieTempStr, sizeof(dieTempStr), " die:%.0fC", dieTempC);
         }
     }
 
-    char metricLine[40];
-    snprintf(metricLine, sizeof(metricLine), "HR:%s O2:%s T:%s", hrStr, spo2Str, tempStr);
+    char metricLine[48];
+    snprintf(metricLine, sizeof(metricLine), "HR:%s O2:%s%s", hrStr, spo2Str, dieTempStr);
     display->drawString(x, contentY, metricLine);
 
     uint32_t irWave[MAX30102_BUFFER_LEN];

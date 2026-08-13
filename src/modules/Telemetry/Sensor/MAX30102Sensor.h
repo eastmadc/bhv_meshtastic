@@ -171,15 +171,15 @@ class MAX30102Sensor : public TelemetrySensor
     uint32_t cachedHeartRate = 0;
     bool cachedHasSpO2 = false;
     uint32_t cachedSpO2 = 0;
-    bool cachedHasTemperature = false;
-    float cachedTemperatureC = 0.0f;
+    bool cachedHasDieTempC = false;
+    float cachedDieTempC = 0.0f;
     bool cachedFingerPresent = false;
     bool latchedHasHeartRate = false;
     uint32_t latchedHeartRate = 0;
     bool latchedHasSpO2 = false;
     uint32_t latchedSpO2 = 0;
-    bool latchedHasTemperature = false;
-    float latchedTemperatureC = 0.0f;
+    bool latchedHasDieTempC = false;
+    float latchedDieTempC = 0.0f;
     uint32_t lastStableHeartMs = 0;
     uint32_t lastStableSpO2Ms = 0;
     uint32_t lastStableTempMs = 0;
@@ -235,6 +235,15 @@ class MAX30102Sensor : public TelemetrySensor
     void prepareDeepSleep();
     bool serviceSensor();
     bool getRawWaveformSnapshot(uint32_t *irOut, uint32_t *redOut, uint16_t capacity, uint16_t *countOut);
+    /**
+     * MAX3010x DIE temperature, for local diagnostic display and future R compensation only.
+     *
+     * Deliberately NOT routed through getMetrics(): meshtastic_HealthMetrics.temperature is documented as
+     * "Body temperature in degrees Celsius" and leaves the badge over LoRa/MQTT, where third-party clients
+     * render it as exactly that. A package temperature is not a body temperature. Any UI using this must
+     * label it as die temperature.
+     */
+    bool getDieTemperatureC(float *outC);
     uint8_t getSensitivity() const;
     uint8_t getMaxSensitivity() const;
     void setSensitivity(uint8_t level);
