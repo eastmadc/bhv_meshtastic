@@ -108,7 +108,29 @@ class MAX30102Sensor : public TelemetrySensor
      * These gate SpO2 only - heart rate comes from the IR channel and is deliberately not held hostage
      * to red-channel health.
      */
-    static constexpr uint32_t SPO2_RED_PI_MIN_PERMYRIAD = 20; // red perfusion index >= 0.20%
+    /*
+     * LIVENESS check, not a quality gate. Chosen from measured data, not intuition.
+     *
+     * Across six hardware conditions (~300 evaluations) the red perfusion index turned out to be
+     * INVERSELY correlated with signal quality on this badge: good contact measured 0.207-0.208%, while
+     * firm pressure gave 0.453% and a barely-resting finger 1.683% - because poor contact produces large
+     * aperiodic excursions that dwarf a real pulse. A perfusion FLOOR therefore preferentially accepts the
+     * conditions least worth trusting, which is why the old 0.20% value both bisected the healthy
+     * distribution (median 0.207%) and failed to reject anything useful.
+     *
+     * Signal quality is enforced by periodicity, rate agreement and stability instead; those reject firm
+     * and light contact at every threshold tested. This constant now only answers "is the red channel
+     * alive at all", where a collapsed channel measures ~0.006%.
+     *
+     * Threshold sweep, pooled good contact (normal + cold, n=132) versus bad (firm + light):
+     *     0.20% -> 40% of good accepted, 5% of bad
+     *     0.12% -> 69%                 , 5%
+     *     0.10% -> 72%                 , 5%     <- benefit saturates here
+     *     0.05% -> 73%                 , 5%     (no further gain)
+     * 0.10% is the knee: it recovers nearly all the available good-contact signal, still clears a dead
+     * channel by ~17x, and goes no lower than the evidence supports. Lowest good window observed: 0.085%.
+     */
+    static constexpr uint32_t SPO2_RED_PI_MIN_PERMYRIAD = 10; // red perfusion index >= 0.10%
     static constexpr uint32_t SPO2_MIN_R_PERCENT = 25;        // ratio-of-ratios >= 0.25
 
     /**
@@ -133,7 +155,48 @@ class MAX30102Sensor : public TelemetrySensor
      * the reported rate, because the SpO2 path has proven markedly more fragile on real hardware.
      * Cost is roughly 19k flops per evaluation at a 2 Hz cadence - well under 0.1% CPU on an ESP32-S3.
      */
-    static constexpr float HR_MIN_AUTOCORR = 0.40f;
+    /*
+     * Set from measured data: 371 evaluations over 8 hardware conditions, classified by ground truth
+     * (steady contact = good; firm pressure / barely-resting / offset = bad).
+     *
+     * HR has no rate-agreement requirement - deliberately, so heart rate stays available when SpO2 is
+     * withheld - which means this constant IS the whole HR quality gate. At the original 0.40 it admitted
+     * 27% of known-bad windows, matching an observed 16% of light-touch evaluations displaying a heart
+     * rate. Raising it trades a little availability for a lot of that:
+     *
+     *     rho   GOOD eligible   BAD eligible   separation
+     *     0.40       93%            27%          65pp
+     *     0.55       89%            21%          68pp
+     *     0.65       87%            15%          71pp   <- marginal knee on THIS dataset
+     *     0.70       82%            13%          69pp   (turns unfavourable)
+     *
+     * FINAL VALUE 0.45, arrived at by getting it wrong first.
+     *
+     * 0.55 was chosen from those pooled windows, then measured on hardware and found too tight. The
+     * pooling was the error: it treats 193 windows drawn from three sessions as independent samples, when
+     * the dominant source of variance is BETWEEN sessions. Measured medians for nominally identical
+     * "steady contact" on the same finger, over consecutive captures:
+     *
+     *     session 1  rho 0.92    HR shown 100%
+     *     session 2  rho 0.77    HR shown  61%
+     *     session 3  rho 0.55    HR shown  25%   <- at a 0.55 gate
+     *
+     * Contact quality drifts with fatigue and position, so good contact spans roughly rho 0.55-0.92. A
+     * gate at 0.55 sits on the bottom edge of that range and collapses availability on a merely-average
+     * session - the same defect as the original 0.20% perfusion floor, and as the 70000-count DC bar
+     * before it: a threshold placed inside the distribution it is judging.
+     *
+     * 0.45 sits below the worst observed good-contact session (0.55) and well above the bad-contact
+     * median (0.24). For heart rate specifically it is better to under-gate and let the stability window
+     * reject the remainder than to go quiet on a wearer whose contact is simply not perfect. Revisit with
+     * multi-subject data, and pool by SESSION rather than by window.
+     *
+     * SPO2_MIN_AUTOCORR stays at 0.50: SpO2 additionally requires the autocorrelation lag to agree with
+     * the kernel's rate within SPO2_LAG_HR_TOLERANCE_PERCENT, and that check already does the work.
+     * Measured, raising this to 0.65 moves bad-window admission only 6% -> 5% while costing good contact,
+     * so the extra strictness buys essentially nothing.
+     */
+    static constexpr float HR_MIN_AUTOCORR = 0.45f;
     static constexpr float SPO2_MIN_AUTOCORR = 0.50f;
     static constexpr uint16_t AUTOCORR_MIN_LAG = 8;  // ~187 bpm
     static constexpr uint16_t AUTOCORR_MAX_LAG = 41; // ~37 bpm
