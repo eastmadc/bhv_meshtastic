@@ -206,6 +206,8 @@ class MAX30102Sensor : public TelemetrySensor
     static constexpr uint16_t AUTOCORR_MIN_LAG = 8;  // ~187 bpm
     static constexpr uint16_t AUTOCORR_MAX_LAG = 41; // ~37 bpm
     static constexpr uint16_t AUTOCORR_MIN_OVERLAP = 25;
+    /** 100 sps with 4x FIFO averaging; also the rate the vendor kernel hard-codes. */
+    static constexpr uint32_t MAX3010X_EFFECTIVE_SAMPLE_RATE_HZ = 25;
     /** Peaks within this of the best are treated as ties, so the shortest (fundamental) period wins. */
     static constexpr float AUTOCORR_HARMONIC_TOLERANCE = 0.05f;
     /** SpO2 additionally requires the autocorrelation lag to agree with the reported rate, +-25%. */
