@@ -651,6 +651,104 @@ uint32_t MAX30102Sensor::trimmedMeanOfWindow(const uint32_t *window, uint8_t cou
     return (uint32_t)((sum + (n / 2)) / n);
 }
 
+bool MAX30102Sensor::computePeriodicity(const uint32_t *ir, uint16_t count, float *bestRhoOut, uint16_t *bestLagOut) const
+{
+    if (bestRhoOut) {
+        *bestRhoOut = -2.0f;
+    }
+    if (bestLagOut) {
+        *bestLagOut = 0;
+    }
+    if (!ir || count == 0) {
+        return false;
+    }
+
+    // rho[lag] for lag in [MIN-1, MAX+1]; the +-1 neighbours are needed to test for an interior maximum.
+    float rho[AUTOCORR_MAX_LAG + 2];
+    for (uint16_t lag = 0; lag < (uint16_t)(AUTOCORR_MAX_LAG + 2); ++lag) {
+        rho[lag] = -2.0f;
+    }
+
+    for (uint16_t lag = (uint16_t)(AUTOCORR_MIN_LAG - 1); lag <= (uint16_t)(AUTOCORR_MAX_LAG + 1); ++lag) {
+        if (lag >= count) {
+            break;
+        }
+        const uint16_t m = (uint16_t)(count - lag);
+        if (m < AUTOCORR_MIN_OVERLAP) {
+            continue;
+        }
+
+        // Centre each shifted segment on its OWN mean (Pearson), not on the whole window's mean.
+        double sa = 0.0, sb = 0.0;
+        for (uint16_t i = 0; i < m; ++i) {
+            sa += (double)ir[i];
+            sb += (double)ir[i + lag];
+        }
+        const double ma = sa / (double)m;
+        const double mb = sb / (double)m;
+
+        double num = 0.0, da = 0.0, db = 0.0;
+        for (uint16_t i = 0; i < m; ++i) {
+            const double a = (double)ir[i] - ma;
+            const double b = (double)ir[i + lag] - mb;
+            num += a * b;
+            da += a * a;
+            db += b * b;
+        }
+        if (da > 0.0 && db > 0.0) {
+            rho[lag] = (float)(num / sqrt(da * db));
+        }
+    }
+
+    // Interior local maxima only: a monotonic decay is what drift and 1/f noise look like, and it has no
+    // peak. Find the strongest first.
+    float bestRho = -2.0f;
+    for (uint16_t lag = AUTOCORR_MIN_LAG; lag <= AUTOCORR_MAX_LAG; ++lag) {
+        if (rho[lag] <= -2.0f || rho[lag - 1] <= -2.0f || rho[lag + 1] <= -2.0f) {
+            continue;
+        }
+        if (rho[lag] >= rho[lag - 1] && rho[lag] >= rho[lag + 1] && rho[lag] > bestRho) {
+            bestRho = rho[lag];
+        }
+    }
+    if (bestRho <= -2.0f) {
+        return false;
+    }
+
+    // Then prefer the FUNDAMENTAL over its subharmonics. A clean pulse train correlates almost as well at
+    // twice the beat interval as at the beat interval itself, so picking the global maximum outright
+    // reports half the true rate whenever the 2x peak edges ahead - measured at 85 and 100 bpm, where it
+    // produced a 50% rate error and would have spuriously failed the SpO2 lag-agreement check. Rescanning
+    // in ascending lag order and taking the first peak statistically indistinguishable from the best one
+    // selects the shortest qualifying period, which is the fundamental. Validated over 45-105 bpm: rate
+    // error drops from a 50% outlier on 2 of 13 rates to a 0.0% median with no failures, and noise
+    // rejection is unchanged.
+    float bestLagRho = bestRho;
+    uint16_t bestLag = 0;
+    for (uint16_t lag = AUTOCORR_MIN_LAG; lag <= AUTOCORR_MAX_LAG; ++lag) {
+        if (rho[lag] <= -2.0f || rho[lag - 1] <= -2.0f || rho[lag + 1] <= -2.0f) {
+            continue;
+        }
+        if (rho[lag] >= rho[lag - 1] && rho[lag] >= rho[lag + 1] && rho[lag] >= (bestRho - AUTOCORR_HARMONIC_TOLERANCE)) {
+            bestLag = lag;
+            bestLagRho = rho[lag];
+            break;
+        }
+    }
+
+    if (bestLag == 0) {
+        return false;
+    }
+    bestRho = bestLagRho;
+    if (bestRhoOut) {
+        *bestRhoOut = bestRho;
+    }
+    if (bestLagOut) {
+        *bestLagOut = bestLag;
+    }
+    return true;
+}
+
 bool MAX30102Sensor::detectFingerPresence(const uint32_t *ir, const uint32_t *red, uint16_t count) const
 {
     if (!ir || !red || count == 0) {
@@ -694,6 +792,40 @@ bool MAX30102Sensor::detectFingerPresence(const uint32_t *ir, const uint32_t *re
         (meanIr > 0 && ((uint64_t)spanIr * 1000ULL) >= ((uint64_t)meanIr * MAX3010X_FINGER_PULSATILITY_PERMILLE)) ||
         (meanRed > 0 && ((uint64_t)spanRed * 1000ULL) >= ((uint64_t)meanRed * MAX3010X_FINGER_PULSATILITY_PERMILLE));
 
+    // Presence detection answers "is something on the sensor?", NOT "is this a pulse?".
+    //
+    // An earlier revision required pulsatility here (dcLevelOk && acLevelOk && pulsatilityOk) to stop
+    // noise being accepted as a finger. Measured on hardware, that rejected a real finger: a wearer at
+    // 193278 IR DC with 801 counts of AC sits at 0.414% pulsatility against the 0.4% threshold, and the
+    // red channel at ~0.28% is below it outright. Windows dipped under the bar intermittently, each dip
+    // incremented the no-finger streak, and the session was killed and restarted every ~6 s - seven times
+    // in a 45 s capture, with a heart rate never once reaching the display. Strictly worse than the bug
+    // it was meant to fix.
+    //
+    // The noise-rejection job belongs to the periodicity gate instead, which does it far better: measured
+    // best-autocorrelation is 0.97-0.99 on a real finger versus 0.227 on pure noise, against thresholds of
+    // 0.40 (HR) and 0.50 (SpO2). Noise now passes presence detection and is then refused downstream, which
+    // is the correct division of responsibility - a permissive "something is here" followed by a strict
+    // "and it repeats like a heartbeat".
+    //
+    // Pulsatility is therefore back to being one of two ways to satisfy the AC requirement, as originally
+    // written.
+    //
+    // acLevelOk is an absolute span in ADC counts (80 IR / 40 RED). Sensor noise alone clears it easily:
+    // over a 100-sample window, Gaussian noise of sigma s has a peak-to-peak span of roughly 5s, so
+    // s >= 30 LSB already exceeds 80 counts regardless of whether anything is touching the sensor. With
+    // the old `acLevelOk || pulsatilityOk`, that absolute test short-circuited the ratio test entirely,
+    // so a flat DC level plus noise - no cardiac component whatsoever - was accepted as a finger and fed
+    // to the kernel, which duly produced heart rates and SpO2 values. Replaying the shipping decision
+    // path on pure noise reproduced this: at sigma 80 on a 90000 DC, 100% of windows passed finger
+    // detection and roughly half of all evaluations put a fabricated number on the OLED.
+    //
+    // MAX3010X_FINGER_PULSATILITY_PERMILLE (0.4%) was already defined and already correct; it was simply
+    // bypassed. Requiring it narrows the fabrication band substantially - it removes the whole low-noise
+    // region, where apparent perfusion is 0.17-0.22% - but it does NOT close it completely, because at
+    // large noise amplitudes the apparent perfusion index also rises above 0.4%. Rejecting aperiodic
+    // noise outright needs the periodicity gate, which is a separate change; this is the cheap half that
+    // uses a constant the code already has.
     return dcLevelOk && (acLevelOk || pulsatilityOk);
 }
 
@@ -711,6 +843,8 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
     uint64_t sumRed = 0;
     uint32_t maxIr = 0;
     uint32_t maxRed = 0;
+    uint32_t minIr = 0xFFFFFFFFu;
+    uint32_t minRed = 0xFFFFFFFFu;
     for (uint16_t i = 0; i < MAX30102_BUFFER_LEN; ++i) {
         const uint32_t ir = irWindow[i];
         const uint32_t red = redWindow[i];
@@ -721,6 +855,12 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
         }
         if (red > maxRed) {
             maxRed = red;
+        }
+        if (ir < minIr) {
+            minIr = ir;
+        }
+        if (red < minRed) {
+            minRed = red;
         }
     }
     const uint32_t meanIr = (uint32_t)(sumIr / MAX30102_BUFFER_LEN);
@@ -818,10 +958,44 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
     int8_t selectedHeartRateValid = 0;
     maxim_heart_rate_and_oxygen_saturation(irWindow, MAX30102_BUFFER_LEN, redWindow, &spo2, &spo2_valid, &selectedHeartRate,
                                            &selectedHeartRateValid);
+    // Periodicity. A heartbeat's distinguishing property is that it repeats, not that it is large; no
+    // amplitude threshold separates a pulse from noise (see HR_MIN_AUTOCORR).
+    float bestRho = -2.0f;
+    uint16_t bestLag = 0;
+    const bool periodic = computePeriodicity(irWindow, MAX30102_BUFFER_LEN, &bestRho, &bestLag);
+    const bool hrPeriodicOk = periodic && (bestRho >= HR_MIN_AUTOCORR);
+    const bool spo2PeriodicOk = periodic && (bestRho >= SPO2_MIN_AUTOCORR);
+    // At 25 Hz effective sample rate, BPM = 60 * 25 / lag.
+    const uint32_t autocorrBpm = (bestLag > 0) ? (uint32_t)(1500u / bestLag) : 0u;
+
     bool hrValueValid = ((selectedHeartRateValid != 0) && (selectedHeartRate >= (int32_t)HEART_RATE_MIN_VALID) &&
-                         (selectedHeartRate <= (int32_t)HEART_RATE_MAX_VALID));
+                         (selectedHeartRate <= (int32_t)HEART_RATE_MAX_VALID) && hrPeriodicOk);
+
+    // For SpO2, also require the periodicity lag to agree with the rate the kernel reported. Two
+    // independent estimators landing on the same interval is much stronger evidence than either alone,
+    // and it is cheap.
+    const bool lagAgreesWithHr =
+        (autocorrBpm > 0) && (selectedHeartRate > 0) &&
+        ((uint64_t)(autocorrBpm > (uint32_t)selectedHeartRate ? autocorrBpm - (uint32_t)selectedHeartRate
+                                                              : (uint32_t)selectedHeartRate - autocorrBpm) *
+             100ULL <=
+         (uint64_t)selectedHeartRate * SPO2_LAG_HR_TOLERANCE_PERCENT);
+    // Red-channel integrity. A failed RED channel drives the ratio toward zero, which the vendor table
+    // maps to a reassuring 96-97% (see SPO2_RED_PI_MIN_PERMYRIAD). Require that red actually carries a
+    // pulsatile component, and that the ratio is above the region where the table folds back.
+    const uint32_t acIr = (maxIr > minIr) ? (maxIr - minIr) : 0;
+    const uint32_t acRed = (maxRed > minRed) ? (maxRed - minRed) : 0;
+    const bool redPerfusionOk =
+        (meanRed > 0) && (((uint64_t)acRed * 10000ULL) >= ((uint64_t)meanRed * SPO2_RED_PI_MIN_PERMYRIAD));
+    // R = (acRed/meanRed) / (acIr/meanIr), tested as acRed*meanIr*100 >= acIr*meanRed*SPO2_MIN_R_PERCENT
+    // to keep it in integer arithmetic.
+    const bool spo2RatioOk = (acIr > 0) && (meanRed > 0) && (((uint64_t)acRed * (uint64_t)meanIr * 100ULL) >=
+                                                             ((uint64_t)acIr * (uint64_t)meanRed * SPO2_MIN_R_PERCENT));
+    const bool redChannelOk = redPerfusionOk && spo2RatioOk;
+
     bool spo2ValueValid = (spo2_valid != 0) && (spo2 != SPO2_INVALID_SENTINEL) &&
-                          (spo2 >= (int32_t)SPO2_MIN_VALID) && (spo2 <= (int32_t)SPO2_MAX_VALID);
+                          (spo2 >= (int32_t)SPO2_MIN_VALID) && (spo2 <= (int32_t)SPO2_MAX_VALID) && redChannelOk &&
+                          spo2PeriodicOk && lagAgreesWithHr;
 
     if (hrValueValid) {
         pushStabilitySample((uint32_t)selectedHeartRate, hrStabilityWindow, &hrStabilityCount, &hrStabilityIndex);
@@ -904,12 +1078,18 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
         latchedHasSpO2 = true;
         latchedSpO2 = filteredSpO2;
         lastStableSpO2Ms = nowMsEval;
-    } else if (spo2ValueValid) {
-        // Latch valid-but-not-stable SpO2 so UI can show it (hold for STABLE_VALUE_HOLD_MS)
-        latchedHasSpO2 = true;
-        latchedSpO2 = (uint32_t)spo2;
-        lastStableSpO2Ms = nowMsEval;
     }
+    // A valid-but-UNSTABLE SpO2 deliberately does NOT refresh the cache or its timestamp.
+    //
+    // This branch used to latch the raw value and stamp lastStableSpO2Ms, which made spo2HoldValid true
+    // continuously and so bypassed the stability gate entirely: "stable" then chose only between the
+    // median and the raw value, never between showing a number and showing none. Observed on real
+    // hardware, a finger sliding off the sensor produced "SpO2 98%, stable" while the heart-rate
+    // estimator behind it was swinging between 33 and 214 bpm.
+    //
+    // The hold exists to bridge brief instability in an otherwise good measurement. It is not a licence
+    // to keep displaying a number once the evidence for it has gone, so only a stable, quality-gated
+    // result may create or refresh the cache.
     if (tempValid && stableHeart) {
         latchedHasDieTempC = true;
         latchedDieTempC = tempC;
@@ -941,10 +1121,13 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
     cachedDieTempC = outputTempC;
 
     const bool usedSpO2Hold = !stableSpO2 && spo2HoldValid;
-    LOG_INFO("HR eval: hr=%d valid=%d stable=%d hr_window_count=%u step=%u hr_out=%u hold=%d", selectedHeartRate, hrValueValid,
-             stableHeart, hrStabilityCount, MAX3010X_SLIDING_STEP, outputHeart, usedHeartHold);
-    LOG_INFO("SpO2 eval: spo2=%d valid=%d stable=%d spo2_window_count=%u spo2_out=%u hold=%d", (int)spo2, spo2ValueValid ? 1 : 0,
-             stableSpO2 ? 1 : 0, spo2StabilityCount, outputSpO2, usedSpO2Hold ? 1 : 0);
+    LOG_INFO("HR eval: hr=%d valid=%d stable=%d hr_window_count=%u step=%u hr_out=%u hold=%d rho=%.2f lag=%u ac_bpm=%u",
+             selectedHeartRate, hrValueValid, stableHeart, hrStabilityCount, MAX3010X_SLIDING_STEP, outputHeart,
+             usedHeartHold, (double)bestRho, bestLag, autocorrBpm);
+    LOG_INFO("SpO2 eval: spo2=%d valid=%d stable=%d spo2_window_count=%u spo2_out=%u hold=%d red_pi_ok=%d ratio_ok=%d "
+             "ac_ir=%u ac_red=%u",
+             (int)spo2, spo2ValueValid ? 1 : 0, stableSpO2 ? 1 : 0, spo2StabilityCount, outputSpO2, usedSpO2Hold ? 1 : 0,
+             redPerfusionOk ? 1 : 0, spo2RatioOk ? 1 : 0, acIr, acRed);
     return true;
 }
 

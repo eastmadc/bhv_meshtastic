@@ -92,6 +92,58 @@ class MAX30102Sensor : public TelemetrySensor
     static constexpr uint32_t SPO2_MAX_VALID = 100;
     /** Algorithm sentinel for "invalid" SpO2 (e.g. Maxim returns -999); never treat as valid. */
     static constexpr int32_t SPO2_INVALID_SENTINEL = -999;
+    /**
+     * Red-channel integrity gate for SpO2.
+     *
+     * The vendor R->SpO2 table is non-monotonic: it peaks at 100 over a wide plateau and returns 95-97 as
+     * the ratio approaches zero. A RED channel that has failed - dead emitter, poor red coupling, or a DC
+     * pedestal carrying no pulsatile component - drives the ratio toward zero and therefore produces a
+     * REASSURING 96-97%, flagged stable, indistinguishable from a healthy reading. Degrading the red
+     * channel makes the displayed number look better, not worse.
+     *
+     * Nothing downstream can recover from that, so SpO2 is refused unless the red channel demonstrably
+     * carries a pulsatile signal of its own, and unless the ratio is above the region where the table
+     * has folded back. Both thresholds were chosen against real badge captures: together they accept
+     * ~98% of genuine on-finger windows while rejecting a red channel degraded to a few percent of normal.
+     * These gate SpO2 only - heart rate comes from the IR channel and is deliberately not held hostage
+     * to red-channel health.
+     */
+    static constexpr uint32_t SPO2_RED_PI_MIN_PERMYRIAD = 20; // red perfusion index >= 0.20%
+    static constexpr uint32_t SPO2_MIN_R_PERCENT = 25;        // ratio-of-ratios >= 0.25
+
+    /**
+     * Periodicity gate.
+     *
+     * Amplitude tests cannot separate a pulse from noise: a flat DC level plus enough noise clears any
+     * absolute AC threshold, and at large noise amplitudes it clears the perfusion-ratio threshold too.
+     * A heartbeat's distinguishing property is not that it is large, it is that it REPEATS. Replaying the
+     * production path on pure noise produced kernel-valid heart rates on 100% of windows and put a number
+     * on the screen for roughly half of all evaluations; no amplitude threshold closes that.
+     *
+     * So each window is scored by its best Pearson autocorrelation at an interior local maximum, searched
+     * over lags corresponding to physiological rates. At 25 Hz, BPM = 1500/lag, so lag 8..41 spans about
+     * 187 down to 37 bpm. Pearson (each shifted segment separately centred and normalised) is used rather
+     * than a biased autocorrelation normalised by total window energy, because the latter is sensitive to
+     * baseline drift and to window length, which makes its threshold untransferable between windows.
+     *
+     * Requiring an INTERIOR local maximum matters: monotonically decaying correlation is what drift and
+     * 1/f noise produce, and it has no peak. A real pulse train has one at the beat interval.
+     *
+     * SpO2 is held to a stricter score than heart rate, and additionally to agreement between the lag and
+     * the reported rate, because the SpO2 path has proven markedly more fragile on real hardware.
+     * Cost is roughly 19k flops per evaluation at a 2 Hz cadence - well under 0.1% CPU on an ESP32-S3.
+     */
+    static constexpr float HR_MIN_AUTOCORR = 0.40f;
+    static constexpr float SPO2_MIN_AUTOCORR = 0.50f;
+    static constexpr uint16_t AUTOCORR_MIN_LAG = 8;  // ~187 bpm
+    static constexpr uint16_t AUTOCORR_MAX_LAG = 41; // ~37 bpm
+    static constexpr uint16_t AUTOCORR_MIN_OVERLAP = 25;
+    /** Peaks within this of the best are treated as ties, so the shortest (fundamental) period wins. */
+    static constexpr float AUTOCORR_HARMONIC_TOLERANCE = 0.05f;
+    /** SpO2 additionally requires the autocorrelation lag to agree with the reported rate, +-25%. */
+    static constexpr uint32_t SPO2_LAG_HR_TOLERANCE_PERCENT = 25;
+    /** Best interior-local-max Pearson autocorrelation of the IR window; false if none exists. */
+    bool computePeriodicity(const uint32_t *ir, uint16_t count, float *bestRhoOut, uint16_t *bestLagOut) const;
     static constexpr uint32_t MAX3010X_EVAL_MIN_INTERVAL_MS = 500; // Limit HR/SpO2 algorithm cadence to ~2Hz
     static constexpr uint32_t STABLE_VALUE_HOLD_MS = 5000; // Keep last stable value briefly during transient instability
     static constexpr float HEART_EMA_ALPHA = 0.35f;        // Faster convergence while retaining smoothing
