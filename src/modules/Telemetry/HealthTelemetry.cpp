@@ -135,7 +135,17 @@ int32_t HealthTelemetryModule::runOnce()
         Default::getConfiguredOrDefaultMsScaled(moduleConfig.telemetry.health_update_interval,
                                                 default_telemetry_broadcast_interval_secs, numOnlineNodes);
     uint32_t result = min(sendToPhoneIntervalMs, meshSendIntervalMs);
-    if (measurementEnabled || pollForScreen) {
+    // Must match the condition guarding serviceSensor() below. Servicing the sensor at only
+    // healthPollIntervalMs (1000 ms) starves the presence state machine: the scan wake window is
+    // MAX30102_PRESENCE_SCAN_WAKE_WINDOW_MS (700 ms) and activation needs
+    // MAX3010X_PRESENCE_CONSECUTIVE_REQUIRED (2) consecutive detections, so at one evaluation per second
+    // exactly one lands inside each wake window, the consecutive counter reaches 1, and sleep() then
+    // resets it to 0. Presence can never fire, no matter how good the signal is.
+    //
+    // Measured: a firm fingertip passed both the DC and peak gates on 19 of 19 presence evaluations and
+    // still produced zero activations, because this branch had dropped to the 1000 ms cadence once
+    // broadcasting became opt-in and the display timed out.
+    if (measurementEnabled || healthScreenEnabled) {
         result = min(result, sensorServiceIntervalMs);
     } else {
         result = min(result, healthPollIntervalMs);
@@ -159,7 +169,20 @@ int32_t HealthTelemetryModule::runOnce()
     if (max30102Sensor.hasSensor()) {
         const bool keepPulseOxAwake = false;
         max30102Sensor.setStayAwake(keepPulseOxAwake);
-        if (measurementEnabled || pollForScreen || max30102Sensor.isActive()) {
+        // Service the sensor whenever the health feature is enabled AT ALL - not only while the screen
+        // happens to be awake.
+        //
+        // This used to test pollForScreen, which additionally requires screen->isScreenOn(). That was
+        // harmless while health_measurement_enabled defaulted to true, because the first term kept the
+        // sensor running regardless. Once broadcasting became opt-in, it became a trap: with the screen
+        // timed out, nothing serviced the sensor, so presence scanning stopped, so a finger could never
+        // be detected, so the screen could never auto-wake for it. The badge's headline interaction died
+        // silently the first time the display slept.
+        //
+        // Transmission remains gated on measurementEnabled further down, so biometrics still do not leave
+        // the device unless the user opts in. This only keeps the low-power presence scan alive, which is
+        // exactly what it exists for.
+        if (measurementEnabled || healthScreenEnabled || max30102Sensor.isActive()) {
             max30102Sensor.serviceSensor();
         }
     }
