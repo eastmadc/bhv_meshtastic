@@ -70,8 +70,21 @@ class MAX30102Sensor : public TelemetrySensor
     static constexpr uint32_t MAX3010X_PRESENCE_IR_PEAK_MIN_IR_ONLY = 4500; // IR-only peak threshold (LED=0x02)
     static constexpr uint8_t MAX3010X_PRESENCE_MIN_SAMPLES = 6;
     static constexpr uint8_t MAX3010X_PRESENCE_CONSECUTIVE_REQUIRED = 2;
-    static constexpr uint32_t MAX3010X_POWERDOWN_RED_MEAN_MAX = 60000;
-    static constexpr uint32_t MAX3010X_POWERDOWN_IR_MEAN_MAX = 70000;
+    /**
+     * Signal-collapse detection for the active measurement epoch.
+     *
+     * These used to be absolute DC thresholds (red < 60000 && ir < 70000). That was ~30x stricter than
+     * detectFingerPresence()'s own 2000/1000 gate, so any wearer whose optical coupling landed between
+     * those two bars was declared "finger present", measured, and then force-slept before a reading could
+     * stabilise. Measured dead band: IR DC 4000..70000 counts -> heart rate never displayed at all.
+     *
+     * Coupling varies enormously between people, so the replacement is RELATIVE: the epoch records its
+     * own starting DC and treats a large fractional drop as the finger leaving. That adapts to whoever is
+     * actually wearing the badge instead of to whoever it was tuned on.
+     */
+    static constexpr uint32_t MAX3010X_POWERDOWN_DC_FRACTION_PERCENT = 40;
+    /** Require consecutive bad evaluations before sleeping, so one noisy window cannot abort a session. */
+    static constexpr uint8_t MAX3010X_NO_FINGER_EVAL_STREAK_FOR_SLEEP = 2;
     static constexpr uint32_t MAX3010X_FINGER_PULSATILITY_PERMILLE = 4; // 0.4%
     static constexpr uint32_t HEART_RATE_MIN_VALID = 35;
     static constexpr uint32_t HEART_RATE_MAX_VALID = 220;
@@ -91,7 +104,16 @@ class MAX30102Sensor : public TelemetrySensor
     static constexpr uint8_t MAX30102_POOR_SIGNAL_STREAK_FOR_BOOST = 4;
     static constexpr uint8_t MAX30102_STABLE_SIGNAL_STREAK_FOR_REDUCE = 10;
     static constexpr uint32_t MAX30102_LED_POWER_ADJUST_INTERVAL_MS = 3000;
-    static constexpr uint32_t MAX30102_PRESENCE_ACTIVE_HOLD_MS = 3000;
+    /**
+     * Grace period after switching to the active profile, before the downshift gate may sleep the sensor.
+     * MUST exceed the time to the first evaluation, or the gate is armed before any evaluation can occur
+     * and the "grace period" grants none. That budget is:
+     *   4000 ms to refill the 100-sample window at 25 Hz (configureMAX30102Profile clears it)
+     * +  500 ms MAX3010X_EVAL_MIN_INTERVAL_MS
+     * +  200 ms sensorServiceIntervalMs tick granularity
+     * = 4700 ms floor.
+     */
+    static constexpr uint32_t MAX30102_PRESENCE_ACTIVE_HOLD_MS = 5000;
     static constexpr uint32_t MAX30102_PRESENCE_STATS_LOG_INTERVAL_MS = 1000;
     static constexpr uint32_t MAX30102_PRESENCE_SCAN_WAKE_WINDOW_MS = 700;
     static constexpr uint32_t MAX30102_PRESENCE_SCAN_INTERVAL_MS = 1000;
@@ -113,6 +135,20 @@ class MAX30102Sensor : public TelemetrySensor
     uint32_t lastEvalMeanIr = 0;
     uint32_t lastEvalMeanRed = 0;
     uint32_t lastDownshiftGateLogMs = 0;
+    /**
+     * Reference IR DC for the current active epoch; 0 = not yet established.
+     *
+     * Taken as the MEDIAN of the first MAX3010X_EPOCH_ANCHOR_SAMPLES finger-present evaluations rather
+     * than the first one alone. Initial contact often contains a placement transient - a hard press that
+     * then relaxes - and anchoring on that single high window would make the legitimate settled contact
+     * that follows look like a 60% collapse and abort the session.
+     */
+    uint32_t activeEpochStartMeanIr = 0;
+    static constexpr uint8_t MAX3010X_EPOCH_ANCHOR_SAMPLES = 3;
+    uint32_t epochAnchorSamples[MAX3010X_EPOCH_ANCHOR_SAMPLES] = {0};
+    uint8_t epochAnchorCount = 0;
+    /** Consecutive evaluations with no finger / collapsed signal. Gates the downshift to presence scanning. */
+    uint8_t noFingerEvalStreak = 0;
     uint8_t max30100RawSampleCount = 0;
     bool max30102PresenceMode = false;
     bool max30102PresenceState = false;

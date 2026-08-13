@@ -89,6 +89,9 @@ void MAX30102Sensor::resetSlidingState()
     slidingNewSamplesSinceEval = 0;
     lastEvalMs = 0;
     max30100RawSampleCount = 0;
+    activeEpochStartMeanIr = 0;
+    epochAnchorCount = 0;
+    noFingerEvalStreak = 0;
 }
 
 void MAX30102Sensor::resetStabilityState()
@@ -243,8 +246,16 @@ bool MAX30102Sensor::updateLowPowerPresenceCache()
     present = rawPresent && (max30102PresenceConsecutiveDetections >= MAX3010X_PRESENCE_CONSECUTIVE_REQUIRED);
 
     const uint32_t nowMs = millis();
-    if ((max30102PresenceStatsLastLogMs == 0) ||
-        ((uint32_t)(nowMs - max30102PresenceStatsLastLogMs) >= MAX30102_PRESENCE_STATS_LOG_INTERVAL_MS)) {
+    // Only log once the detection block above actually ran, otherwise every line reports hard-coded zeros.
+    // The scan cycle is WAKE_WINDOW (700 ms) + SCAN_INTERVAL (1000 ms) = 1700 ms while the rate limit is
+    // 1000 ms, and sleep() zeroes the timestamp - so exactly one tick per wake was admitted and it was
+    // always the first, taken right after resetSlidingState() when slidingSampleCount == 1. That is below
+    // MAX3010X_PRESENCE_MIN_SAMPLES, so meanIr/maxIr were never computed. Every presence line ever logged
+    // by this firmware (158/158 across a 5-minute capture) read "mean_ir=0 max_ir=0 n=1", which means the
+    // presence thresholds have never been observable, let alone validated, from these logs.
+    if ((recentCount >= MAX3010X_PRESENCE_MIN_SAMPLES) &&
+        ((max30102PresenceStatsLastLogMs == 0) ||
+         ((uint32_t)(nowMs - max30102PresenceStatsLastLogMs) >= MAX30102_PRESENCE_STATS_LOG_INTERVAL_MS))) {
         max30102PresenceStatsLastLogMs = nowMs;
         LOG_INFO("MAX30102 presence stats(low): present=%d raw=%d mean_ir=%u mean_red=%u max_ir=%u max_red=%u dc=%d peak=%d n=%u c=%u",
                  present, rawPresent, meanIr, meanRed, maxIr, maxRed, dcPresent, peakPresent, recentCount,
@@ -700,12 +711,36 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
     }
     const uint32_t meanIr = (uint32_t)(sumIr / MAX30102_BUFFER_LEN);
     const uint32_t meanRed = (uint32_t)(sumRed / MAX30102_BUFFER_LEN);
-    const bool belowPowerdownMeanThresholds =
-        (meanRed < MAX3010X_POWERDOWN_RED_MEAN_MAX) && (meanIr < MAX3010X_POWERDOWN_IR_MEAN_MAX);
     lastEvalMeanIr = meanIr;
     lastEvalMeanRed = meanRed;
 
     const bool fingerPresent = detectFingerPresence(irWindow, redWindow, MAX30102_BUFFER_LEN);
+
+    // Anchor this epoch's reference DC on the first evaluation that actually sees a finger, then judge
+    // "the finger has left" relative to that anchor rather than against a fixed count. Optical coupling
+    // varies by more than an order of magnitude across wearers, so an absolute bar silently excludes
+    // whole populations (see MAX3010X_POWERDOWN_DC_FRACTION_PERCENT).
+    if (fingerPresent && epochAnchorCount < MAX3010X_EPOCH_ANCHOR_SAMPLES) {
+        epochAnchorSamples[epochAnchorCount++] = meanIr;
+        // Re-derive from the median of what we have so far, so the anchor self-corrects as the contact
+        // settles instead of being fixed by an initial hard press.
+        activeEpochStartMeanIr = medianOfWindow(epochAnchorSamples, epochAnchorCount);
+        LOG_INFO("MAX30102 active epoch anchor: n=%u mean_ir=%u anchor=%u (collapse below %u)", epochAnchorCount, meanIr,
+                 activeEpochStartMeanIr,
+                 (uint32_t)((uint64_t)activeEpochStartMeanIr * MAX3010X_POWERDOWN_DC_FRACTION_PERCENT / 100ULL));
+    }
+    const bool signalCollapsed =
+        (activeEpochStartMeanIr != 0) &&
+        (meanIr < (uint32_t)((uint64_t)activeEpochStartMeanIr * MAX3010X_POWERDOWN_DC_FRACTION_PERCENT / 100ULL));
+
+    // A single bad window must not end a session; require a streak before giving up.
+    const bool measurementViable = fingerPresent && !signalCollapsed;
+    if (measurementViable) {
+        noFingerEvalStreak = 0;
+    } else if (noFingerEvalStreak < MAX3010X_NO_FINGER_EVAL_STREAK_FOR_SLEEP) {
+        noFingerEvalStreak++;
+    }
+    const bool giveUpOnEpoch = !measurementViable && (noFingerEvalStreak >= MAX3010X_NO_FINGER_EVAL_STREAK_FOR_SLEEP);
     const uint32_t nowMs = millis();
     if ((max30102PresenceStatsLastLogMs == 0) ||
         ((uint32_t)(nowMs - max30102PresenceStatsLastLogMs) >= MAX30102_PRESENCE_STATS_LOG_INTERVAL_MS)) {
@@ -713,36 +748,43 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
         LOG_INFO("MAX30102 presence stats(active): present=%d mean_ir=%u mean_red=%u max_ir=%u max_red=%u n=%u", fingerPresent, meanIr,
                  meanRed, maxIr, maxRed, MAX30102_BUFFER_LEN);
     }
-    if (!fingerPresent) {
+    if (!measurementViable) {
         resetStabilityState();
         clearRawWaveformCache();
 
-        concurrency::LockGuard g(&metricsLock);
-        hasEvaluatedWindow = true;
-        cachedFingerPresent = false;
-        cachedHasHeartRate = false;
-        cachedHeartRate = 0;
-        cachedHasSpO2 = false;
-        cachedSpO2 = 0;
-        cachedHasTemperature = false;
-        cachedTemperatureC = 0.0f;
-        latchedHasHeartRate = false;
-        latchedHeartRate = 0;
-        latchedHasSpO2 = false;
-        latchedSpO2 = 0;
-        latchedHasTemperature = false;
-        latchedTemperatureC = 0.0f;
-        lastStableHeartMs = 0;
-        lastStableSpO2Ms = 0;
-        lastStableTempMs = 0;
-        hasHeartEma = false;
-        heartEma = 0.0f;
-        hasHeartOutputEma = false;
-        heartOutputEma = 0.0f;
-        if (!keepAwake && chipType == PulseOxChipType::MAX30102 && max30102PresenceTriggeredActive) {
+        {
+            concurrency::LockGuard g(&metricsLock);
+            hasEvaluatedWindow = true;
+            cachedFingerPresent = false;
+            cachedHasHeartRate = false;
+            cachedHeartRate = 0;
+            cachedHasSpO2 = false;
+            cachedSpO2 = 0;
+            cachedHasTemperature = false;
+            cachedTemperatureC = 0.0f;
+            latchedHasHeartRate = false;
+            latchedHeartRate = 0;
+            latchedHasSpO2 = false;
+            latchedSpO2 = 0;
+            latchedHasTemperature = false;
+            latchedTemperatureC = 0.0f;
+            lastStableHeartMs = 0;
+            lastStableSpO2Ms = 0;
+            lastStableTempMs = 0;
+            hasHeartEma = false;
+            heartEma = 0.0f;
+            hasHeartOutputEma = false;
+            heartOutputEma = 0.0f;
+        }
+        // metricsLock is released above on purpose: sleep() performs I2C traffic and must not run while
+        // the metrics mutex is held.
+        if (giveUpOnEpoch && !keepAwake && chipType == PulseOxChipType::MAX30102 && max30102PresenceTriggeredActive) {
             max30102PresenceTriggeredActive = false;
-            LOG_INFO("MAX30102 no finger in active eval, sleeping sensor (next scan in %ums)",
-                     MAX30102_PRESENCE_SCAN_INTERVAL_MS);
+            activeEpochStartMeanIr = 0;
+            epochAnchorCount = 0;
+            noFingerEvalStreak = 0;
+            LOG_INFO("MAX30102 no finger in active eval (mean_ir=%u collapsed=%d), sleeping sensor (next scan in %ums)",
+                     meanIr, signalCollapsed, MAX30102_PRESENCE_SCAN_INTERVAL_MS);
             sleep();
             max30102PresenceScanWakeStartedMs = 0;
             max30102PresenceScanNextWakeMs = millis() + MAX30102_PRESENCE_SCAN_INTERVAL_MS;
@@ -810,7 +852,10 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
     uint32_t smoothedHeart = filteredHeart;
     concurrency::LockGuard g(&metricsLock);
     hasEvaluatedWindow = true;
-    cachedFingerPresent = !belowPowerdownMeanThresholds;
+    // Report the finger state we actually determined. This used to be `!belowPowerdownMeanThresholds`,
+    // a second and far stricter definition of "present" that contradicted detectFingerPresence() above
+    // and caused the downshift gate to sleep the sensor mid-measurement for most wearers.
+    cachedFingerPresent = measurementViable;
 
     if (stableHeart) {
         if (!hasHeartEma) {
@@ -1266,17 +1311,19 @@ bool MAX30102Sensor::serviceSensor()
 
         const uint32_t nowMs = millis();
         const bool holdElapsed = (uint32_t)(nowMs - max30102PresenceActiveSinceMs) >= MAX30102_PRESENCE_ACTIVE_HOLD_MS;
-        const bool belowPowerdownMeanThresholds =
-            (lastEvalMeanRed < MAX3010X_POWERDOWN_RED_MEAN_MAX) && (lastEvalMeanIr < MAX3010X_POWERDOWN_IR_MEAN_MAX);
+        const bool streakReached = noFingerEvalStreak >= MAX3010X_NO_FINGER_EVAL_STREAK_FOR_SLEEP;
         if ((lastDownshiftGateLogMs == 0) || ((uint32_t)(nowMs - lastDownshiftGateLogMs) >= 1000)) {
             lastDownshiftGateLogMs = nowMs;
-            LOG_INFO(
-                "MAX30102 downshift gate: hold=%d hasWindow=%d finger=%d mean_ir=%u mean_red=%u below=%d active=%d mode=%s", holdElapsed,
-                hasWindow, fingerPresent, lastEvalMeanIr, lastEvalMeanRed, belowPowerdownMeanThresholds, max30102PresenceTriggeredActive,
-                max30102PresenceMode ? "presence" : "active");
+            LOG_INFO("MAX30102 downshift gate: hold=%d hasWindow=%d finger=%d mean_ir=%u mean_red=%u anchor=%u streak=%u "
+                     "active=%d mode=%s",
+                     holdElapsed, hasWindow, fingerPresent, lastEvalMeanIr, lastEvalMeanRed, activeEpochStartMeanIr,
+                     noFingerEvalStreak, max30102PresenceTriggeredActive, max30102PresenceMode ? "presence" : "active");
         }
-        if (holdElapsed && hasWindow && !fingerPresent) {
+        if (holdElapsed && hasWindow && !fingerPresent && streakReached) {
             max30102PresenceTriggeredActive = false;
+            activeEpochStartMeanIr = 0;
+            epochAnchorCount = 0;
+            noFingerEvalStreak = 0;
             LOG_INFO("MAX30102 no finger, entering sleep presence-scan mode");
             sleep();
             max30102PresenceScanWakeStartedMs = 0;
