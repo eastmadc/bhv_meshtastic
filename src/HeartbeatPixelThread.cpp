@@ -85,6 +85,32 @@ int32_t HeartbeatPixelThread::runOnce()
         nextFrameMs = nowMs;
     }
 
+#ifdef BHV_LED_CROSSTALK_TEST
+    // DIAGNOSTIC BUILD ONLY - not compiled unless -D BHV_LED_CROSSTALK_TEST is set.
+    //
+    // Alternates the whole LED rail via ENABLE_VLED so the optical leak from the 14 WS2812Bs into the
+    // MAX30102 photodiode can be measured by differencing, instead of argued about. With no finger on
+    // the sensor the presence-mode log already reports mean_ir/mean_red every scan, so bucketing those
+    // by rail state gives leak_ir and leak_red directly. No finger, and no user, required.
+    {
+        static uint32_t lastToggleMs = 0;
+        static bool railOn = true;
+        if (lastToggleMs == 0) {
+            lastToggleMs = nowMs;
+        }
+        if ((uint32_t)(nowMs - lastToggleMs) >= BHV_LED_CROSSTALK_PERIOD_MS) {
+            lastToggleMs = nowMs;
+            railOn = !railOn;
+            powerStrips(railOn);
+            LOG_INFO("LEDRAIL %s", railOn ? "ON" : "OFF");
+        }
+        if (!railOn) {
+            // Rail is down; skip rendering so nothing is clocked into an unpowered chain.
+            return kAnimationIntervalMs;
+        }
+    }
+#endif
+
     if (runningStartup) {
         renderStartupFrame(nowMs);
         if ((nowMs - startupStartMs) >= kStartupDurationMs) {

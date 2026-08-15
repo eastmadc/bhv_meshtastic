@@ -33,6 +33,11 @@ class MAX30102Sensor : public TelemetrySensor
     static constexpr uint8_t MAX30100_REG_TEMP_INTEGER = 0x16;
     static constexpr uint8_t MAX30100_REG_TEMP_FRACTION = 0x17;
     static constexpr uint8_t MAX30100_REG_PART_ID = 0xFF;
+    static constexpr uint8_t MAX3010X_REG_INT_STATUS_1 = 0x00;
+    /** Ambient-light-cancellation overflow: the ALC has saturated, so this window's PPG is unusable. */
+    static constexpr uint8_t MAX3010X_INT_ALC_OVF = 0x20;
+    /** Counts samples LOST to a full FIFO. Cleared when a complete sample is popped, so read it FIRST. */
+    static constexpr uint8_t MAX3010X_REG_OVF_COUNTER = 0x05;
     static constexpr uint8_t MAX3010X_REG_FIFO_WRITE_POINTER = 0x04;
     static constexpr uint8_t MAX3010X_REG_FIFO_READ_POINTER = 0x06;
     static constexpr uint8_t MAX3010X_REG_FIFO_DATA = 0x07;
@@ -250,6 +255,9 @@ class MAX30102Sensor : public TelemetrySensor
     uint32_t lastEvalMeanIr = 0;
     uint32_t lastEvalMeanRed = 0;
     uint32_t lastDownshiftGateLogMs = 0;
+    /** Diagnostics: windows seen with ambient-light-cancellation overflow. */
+    uint32_t alcOverflowEvents = 0;
+    uint32_t lastIntegrityLogMs = 0;
     /**
      * Reference IR DC for the current active epoch; 0 = not yet established.
      *
@@ -321,6 +329,8 @@ class MAX30102Sensor : public TelemetrySensor
     void appendSlidingSample(uint32_t ir, uint32_t red);
     void copySlidingWindow(uint32_t *irOut, uint32_t *redOut, uint16_t count);
     void resetSlidingState();
+    /** Discard the accumulated sample window WITHOUT disturbing the active epoch anchor or streak. */
+    void discardSampleWindow();
     void resetStabilityState();
     bool detectFingerPresence(const uint32_t *ir, const uint32_t *red, uint16_t count) const;
     void pushStabilitySample(uint32_t sample, uint32_t *window, uint8_t *count, uint8_t *index);

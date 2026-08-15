@@ -106,6 +106,7 @@ void MAX30102Sensor::resetSlidingState()
     activeEpochStartMeanIr = 0;
     epochAnchorCount = 0;
     noFingerEvalStreak = 0;
+    alcOverflowEvents = 0;
 }
 
 void MAX30102Sensor::resetStabilityState()
@@ -425,10 +426,85 @@ bool MAX30102Sensor::readMAX30100Temperature(TwoWire *bus, uint8_t address, floa
     return true;
 }
 
+void MAX30102Sensor::discardSampleWindow()
+{
+    // Deliberately narrower than resetSlidingState(): the accumulated PPG is unusable, but the active
+    // epoch's DC anchor and no-finger streak describe the CONTACT, which has not changed. Clearing those
+    // too would restart the epoch on every transient and churn the session.
+    memset(slidingIrWindow, 0, sizeof(slidingIrWindow));
+    memset(slidingRedWindow, 0, sizeof(slidingRedWindow));
+    slidingWriteIndex = 0;
+    slidingSampleCount = 0;
+    slidingNewSamplesSinceEval = 0;
+}
+
 uint16_t MAX30102Sensor::ingestMAX30102Fifo(TwoWire *bus, uint8_t address)
 {
     if (!bus || address == 0) {
         return 0;
+    }
+
+    // Sample-stream integrity, checked BEFORE draining.
+    //
+    // Everything downstream assumes samples are uniformly spaced at the effective 25 Hz: the vendor kernel
+    // hard-codes that rate, and the autocorrelation converts lag to BPM with it. If the part dropped
+    // samples, the time axis is wrong and every rate derived from the window is wrong with it - silently,
+    // and in a way that looks like a plausible heart rate rather than an error.
+    //
+    // OVF_COUNTER must be read first because the part clears it as soon as a complete sample is popped.
+    // It also disambiguates the pointer aliasing: a completely full FIFO has wr == rd, identical to empty,
+    // so `available` alone cannot tell "nothing new" from "you lost everything".
+    //
+    // Scoped to ACTIVE mode on purpose. Presence scanning runs at 100 sps with no averaging, giving only
+    // ~320 ms of FIFO, and it re-clears the buffer every wake anyway - so overflow there is expected,
+    // harmless, and invalidating on it would break presence detection entirely.
+    //
+    // MEASURED, AND THE REASON THIS ONLY OBSERVES: on real hardware OVF_COUNTER is non-zero on virtually
+    // every service call - 4.8 events/s against a 5/s service cadence, 5.3 lost samples per event, and
+    // 25.5 lost samples/s against a 25 Hz production rate. Discarding the accumulated window on that flag
+    // (which is what the design review recommended, unqualified) cleared the ring buffer every 200 ms so
+    // it never reached the 100 samples an evaluation needs: measurement stopped completely, hasWindow
+    // stayed 0, and the badge produced nothing at all.
+    //
+    // So the flag is real and continuous, not occasional. Until we understand WHY - whether the part is
+    // producing faster than the configured 25 Hz, whether the drain loop's
+    // available = (wr - rd) & 0x1F aliases a full FIFO to empty and stalls, or whether the counter simply
+    // is not cleared the way the datasheet describes - it cannot be used as an invalidation trigger.
+    // Counting it is genuinely new information; acting on it destroys the feature.
+    if (!max30102PresenceMode) {
+        // NOTE: register 0x05 is NOT read as an overflow counter here, and an earlier revision was wrong
+        // to do so. Instrumented on hardware over 465 service calls, its value equalled the available
+        // sample count (wr - rd) on 98.5% of reads, while FIFO occupancy never exceeded 6 of 32 - a fill
+        // level at which overflow is impossible. Whatever this module returns there, it is not lost
+        // samples, and treating it as such produced a "continuous overflow" alarm that was pure artefact.
+        // The drain keeps up comfortably: ~5-6 samples per 200 ms service call against 32 of capacity.
+        uint8_t intStatus = 0;
+        if (readRegister(bus, address, MAX3010X_REG_INT_STATUS_1, &intStatus) && (intStatus & MAX3010X_INT_ALC_OVF)) {
+            // Ambient-light cancellation saturated: this window's PPG reflects the ALC railing rather than
+            // tissue. Reading the register clears the latched flag.
+            alcOverflowEvents++;
+        }
+
+#ifdef BHV_PPG_DIAG
+        // Log the raw FIFO pointers alongside the overflow counter. The open question is WHY
+        // OVF_COUNTER is non-zero on essentially every service call while heart rate stays stable:
+        // is the part outrunning the drain, or does available=(wr-rd)&0x1F alias a full FIFO to
+        // empty and stall? Those look identical from the counter alone but differ completely here.
+        {
+            uint8_t wp = 0, rp = 0, ov2 = 0;
+            readRegister(bus, address, MAX3010X_REG_FIFO_WRITE_POINTER, &wp);
+            readRegister(bus, address, MAX3010X_REG_FIFO_READ_POINTER, &rp);
+            readRegister(bus, address, MAX3010X_REG_OVF_COUNTER, &ov2);
+            LOG_INFO("FIFODIAG wr=%u rd=%u avail=%u reg05=%u slid=%u", wp, rp,
+                     (unsigned)((wp - rp) & MAX3010X_FIFO_POINTER_MASK), ov2, slidingSampleCount);
+        }
+#endif
+
+        const uint32_t nowMs = millis();
+        if (alcOverflowEvents && ((lastIntegrityLogMs == 0) || ((uint32_t)(nowMs - lastIntegrityLogMs) >= 5000))) {
+            lastIntegrityLogMs = nowMs;
+            LOG_WARN("MAX30102 integrity: alc_ovf_events=%u", alcOverflowEvents);
+        }
     }
 
     uint16_t ingested = 0;
@@ -869,6 +945,12 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
     lastEvalMeanRed = meanRed;
 
     const bool fingerPresent = detectFingerPresence(irWindow, redWindow, MAX30102_BUFFER_LEN);
+#ifdef BHV_PPG_DIAG
+    // Unconditional: the normal "SpO2 input" line is downstream of the finger gate, so with nobody
+    // present the LED-drive sweep would log nothing at all.
+    LOG_INFO("DCDIAG drive=0x%02X mean_ir=%u mean_red=%u max_ir=%u finger=%d", max30102ActiveLedPower, meanIr,
+             meanRed, maxIr, fingerPresent ? 1 : 0);
+#endif
 
     // Anchor this epoch's reference DC on the first evaluation that actually sees a finger, then judge
     // "the finger has left" relative to that anchor rather than against a fixed count. Optical coupling
@@ -1473,6 +1555,29 @@ bool MAX30102Sensor::serviceSensor()
         configureMAX30102Profile(false);
     }
 
+#ifdef BHV_PPG_DIAG_LEDSWEEP
+    // With NO finger, mean_ir vs LED drive decomposes the optical pedestal: the intercept is ambient
+    // plus dark current (independent of drive), the slope is light returning from the enclosure/air
+    // without traversing tissue. Neither needs a person present.
+    {
+        static const uint8_t kSweep[] = {0x00, 0x08, 0x10, 0x18, 0x20, 0x2F, 0x40, 0x5F, 0x7F};
+        static uint8_t sweepIdx = 0;
+        static uint32_t lastSweepMs = 0;
+        const uint32_t nowSweep = millis();
+        if (lastSweepMs == 0) { lastSweepMs = nowSweep; }
+        if ((uint32_t)(nowSweep - lastSweepMs) >= BHV_PPG_DIAG_LEDSWEEP) {
+            lastSweepMs = nowSweep;
+            sweepIdx = (uint8_t)((sweepIdx + 1) % (sizeof(kSweep) / sizeof(kSweep[0])));
+            max30102ActiveLedPower = kSweep[sweepIdx];
+            max30102.setPulseAmplitudeRed(max30102ActiveLedPower);
+            max30102.setPulseAmplitudeIR(max30102ActiveLedPower);
+            discardSampleWindow();
+            LOG_INFO("LEDSWEEP drive=0x%02X (%u x 0.2mA = %u.%u mA)", max30102ActiveLedPower,
+                     max30102ActiveLedPower, (max30102ActiveLedPower * 2) / 10, (max30102ActiveLedPower * 2) % 10);
+        }
+    }
+#endif
+
     if (chipType == PulseOxChipType::MAX30102) {
         ingestMAX30102Fifo(bus, address);
     } else if (chipType == PulseOxChipType::MAX30100) {
@@ -1553,6 +1658,17 @@ bool MAX30102Sensor::getMetrics(meshtastic_Telemetry *measurement)
     }
 
     if (!localHasEvaluatedWindow) {
+        return false;
+    }
+
+    // Nothing worth reporting is not the same as a reading of zero.
+    //
+    // hasEvaluatedWindow only means "a window has been processed at some point", so with honest gating
+    // active - which withholds far more often than the original always-show behaviour - this returned
+    // true with every field absent. Callers treat a true return as "there is a measurement", and the
+    // result went out on the wire as `temperature=0.000000, heart_bpm=0, spO2=0`: a packet asserting a
+    // heart rate of zero, observed in real capture. Report nothing rather than nothing-shaped-as-zero.
+    if (!localHasHeartRate && !localHasSpO2) {
         return false;
     }
 

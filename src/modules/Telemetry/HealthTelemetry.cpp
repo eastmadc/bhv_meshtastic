@@ -167,7 +167,13 @@ int32_t HealthTelemetryModule::runOnce()
 
     // Keep-awake is disabled so MAX3010x always uses sleep/presence-scan behavior when possible.
     if (max30102Sensor.hasSensor()) {
+#ifdef BHV_PPG_DIAG
+        // Diagnostic builds hold the sensor in ACTIVE mode so register-level experiments run without a
+        // finger present. Costs battery; never enabled in a normal build.
+        const bool keepPulseOxAwake = true;
+#else
         const bool keepPulseOxAwake = false;
+#endif
         max30102Sensor.setStayAwake(keepPulseOxAwake);
         // Service the sensor whenever the health feature is enabled AT ALL - not only while the screen
         // happens to be awake.
