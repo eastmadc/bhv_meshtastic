@@ -92,6 +92,10 @@ original 70000-count bar.
 
 Three things worth knowing from the measurements:
 
+- **The sensor is readout-noise limited, not photon limited.** Measured floor is ~4.0 counts rms and flat
+  across a 16x change in LED drive - shot noise would scale as sqrt(I) and predicts 0.15. Against a
+  326-count cardiac AC that is an SNR of 78x (38 dB). An earlier revision of these notes claimed 293x from
+  shot noise alone; that was wrong by 3.7x, though the contact-limited conclusion it supported still holds.
 - **Perfusion index is inversely correlated with signal quality on this badge.** Good contact measures
   0.208%, firm pressure 0.453%, a barely-resting finger 1.683%, because poor contact produces large
   aperiodic excursions that dwarf a pulse. Any amplitude-based gate here is directionally wrong.

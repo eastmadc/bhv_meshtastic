@@ -867,8 +867,24 @@ bool MAX30102Sensor::evaluateSlidingWindow(TwoWire *bus, uint8_t address)
 #ifdef BHV_PPG_DIAG
     // Unconditional: the normal "SpO2 input" line is downstream of the finger gate, so with nobody
     // present the LED-drive sweep would log nothing at all.
-    LOG_INFO("DCDIAG drive=0x%02X mean_ir=%u mean_red=%u max_ir=%u finger=%d", max30102ActiveLedPower, meanIr,
-             meanRed, maxIr, fingerPresent ? 1 : 0);
+    //
+    // Also reports the window standard deviation in milli-counts. With no finger there is no cardiac
+    // component, so that IS the noise floor - which makes the datasheet noise budget (shot + quantisation)
+    // directly falsifiable rather than merely plausible, and lets the sqrt(I) shot-noise scaling be
+    // checked across the LED drive sweep.
+    {
+        double sIr = 0.0, sRed = 0.0;
+        for (uint16_t i = 0; i < MAX30102_BUFFER_LEN; ++i) {
+            const double di = (double)irWindow[i] - (double)meanIr;
+            const double dr = (double)redWindow[i] - (double)meanRed;
+            sIr += di * di;
+            sRed += dr * dr;
+        }
+        const uint32_t sdIrmc = (uint32_t)(sqrt(sIr / MAX30102_BUFFER_LEN) * 1000.0);
+        const uint32_t sdRedmc = (uint32_t)(sqrt(sRed / MAX30102_BUFFER_LEN) * 1000.0);
+        LOG_INFO("DCDIAG drive=0x%02X mean_ir=%u mean_red=%u max_ir=%u sd_ir_mc=%u sd_red_mc=%u finger=%d",
+                 max30102ActiveLedPower, meanIr, meanRed, maxIr, sdIrmc, sdRedmc, fingerPresent ? 1 : 0);
+    }
 #endif
 
     // Anchor this epoch's reference DC on the first evaluation that actually sees a finger, then judge
@@ -1469,6 +1485,28 @@ bool MAX30102Sensor::serviceSensor()
     if (chipType == PulseOxChipType::MAX30102 && max30102PresenceMode) {
         configureMAX30102Profile(false);
     }
+
+#ifdef BHV_PPG_DIAG_ADCSWEEP
+    // Sweep the ADC full-scale range at FIXED LED drive. If the measured noise floor stays constant in
+    // COUNTS it is output-referred (digital/quantisation-like); if it stays constant in PICOAMPS it is
+    // input-referred (analog front-end). That decides whether range and drive can be traded for SNR.
+    {
+        static const int kRanges[] = {2048, 4096, 8192, 16384};
+        static uint8_t rIdx = 0;
+        static uint32_t lastRangeMs = 0;
+        const uint32_t nowR = millis();
+        if (lastRangeMs == 0) { lastRangeMs = nowR; }
+        if ((uint32_t)(nowR - lastRangeMs) >= BHV_PPG_DIAG_ADCSWEEP) {
+            lastRangeMs = nowR;
+            rIdx = (uint8_t)((rIdx + 1) % 4);
+            // Register values are private to the vendor .cpp; SPO2_CONFIG[6:5] per the datasheet.
+            static const uint8_t kRangeBits[] = {0x00, 0x20, 0x40, 0x60};
+            max30102.setADCRange(kRangeBits[rIdx]);
+            discardSampleWindow();
+            LOG_INFO("ADCSWEEP range=%d nA", kRanges[rIdx]);
+        }
+    }
+#endif
 
 #ifdef BHV_PPG_DIAG_LEDSWEEP
     // With NO finger, mean_ir vs LED drive decomposes the optical pedestal: the intercept is ambient
