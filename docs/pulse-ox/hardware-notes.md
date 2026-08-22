@@ -117,17 +117,21 @@ service tick is 200 ms, so polling has ample margin in normal operation.
 The intuitive "14 × 60 mA = 840 mA of switching transients" is wrong by more than an order of magnitude,
 and several earlier conclusions built on it do not survive.
 
-The TPS61040 runs in DCM peak-current PFM from Vext − Vf(D15) ≈ 2.85 V with L1 = 3.3 µH. Its deliverable
-output current is about **105 mA typical**, and roughly **57 mA on a low battery**. The shipped animation
+The TPS61040 runs in DCM peak-current PFM from Vext − Vf(D15) ≈ 2.85 V with L1 = 3.3 µH. It leaves DCM at
+about **105 mA typical** and roughly **57 mA on a low battery** — that is where regulation is lost, *not*
+where the rail fails, and an earlier revision of this document conflated the two. The shipped animation
 (`kOutputScale = 0.35`, one colour channel per LED) draws a mean of ~35 mA and peaks near **55 mA**.
 
 Two consequences:
 
-- **Margin is thin.** Default settings on a worst-case part with a low battery leave about 4%. The
-  user-selectable **white preset demands ~137 mA and overloads the boost by ~1.7×**, collapsing `+5VL` on
-  animation peaks. Because the collapse tracks the animation, it reads as a firmware bug.
-  `kOutputScale` is therefore supply-limited, not aesthetic — it is documented as such in
-  `HeartbeatPixelThread.h`.
+- **Margin is real, but only at the weak-battery corner.** Modelling the datasheet's 400 ns minimum
+  off-time (SLVS413L 6.4.1), `+5VL` reaches the WS2812B 3.5 V minimum at ~255 mA on a good battery
+  (VBAT 3.7, Ipk 400 mA) and ~107 mA at the worst corner (VBAT 3.0, Ipk 250 mA) — roughly 2× the
+  loss-of-regulation figures above. The shipped animation's 55 mA holds 5.07 V and 4.72 V respectively.
+  The white preset's ~137 mA holds 5.03 V on a good battery and 4.10 V at VBAT 3.0 with a typical part;
+  only the joint corner — a flat battery **and** a low-current-limit part — brings it near 3.0 V.
+  So the preset is a weak-battery consideration, not a general overload. `kOutputScale` is
+  supply-limited at that corner, not across the board.
 - **Conducted LED→PPG coupling is not the problem.** Solving the ground pour as a resistor grid puts
   LED-to-sensor transfer resistance in the low milliohms, giving tens of microvolts of ground bounce
   against a measured cardiac AC of ~11,000 ppm. Every conducted path computes to **≥70 dB below** the

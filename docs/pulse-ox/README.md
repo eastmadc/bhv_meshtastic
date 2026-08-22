@@ -106,9 +106,11 @@ Three things worth knowing from the measurements:
   for this; pooling windows across sessions hides it.
 
 ## Known-incomplete
-- **A per-frame LED current budget.** The boost supplies ~105 mA typical and ~57 mA on a low battery,
-  while the selectable white preset demands ~137 mA. `kOutputScale` is documented as supply-limited, but a
-  budget in `applyFrame()` would make bright presets safe by scaling them rather than browning out.
+- **A per-frame LED current budget.** Implemented — `applyFrame()` now scales a frame down rather than
+  letting it collapse the rail. Worth knowing what it does and does not protect: the boost leaves DCM at
+  ~105 mA (~57 mA on a low battery), but `+5VL` does not reach the WS2812B 3.5 V floor until ~255 mA on a
+  good battery and ~107 mA at the worst corner. So the budget guards the weak-battery corner; bright
+  presets are not a general overload. An earlier revision of this file said otherwise.
 - **FIFO overflow fires continuously and nobody knows why.** The overflow counter and the ALC overflow flag
   are now read and logged, which is new - nothing had ever read them. On hardware OVF_COUNTER is non-zero on
   virtually every service call: 4.8 events/s against a 5/s cadence, 25.5 lost samples/s against a 25 Hz

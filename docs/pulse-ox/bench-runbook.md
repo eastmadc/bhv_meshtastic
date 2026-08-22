@@ -123,8 +123,10 @@ sunlight trips it.
 
 ## Experiment 5 — LED brightness against the supply
 
-**Question.** The TPS61040 supplies ~105 mA typical and ~57 mA on a low battery. The white preset demands
-~137 mA. Does the rail actually collapse?
+**Question.** The white preset draws ~137 mA. Modelling says that is fine on a good battery (5.03 V) and
+survivable at VBAT 3.0 with a typical part (4.10 V), reaching ~3.0 V only when a flat battery coincides
+with a low-current-limit part. Does hardware agree, and specifically does it hold up on a nearly flat
+battery?
 
 **Procedure.** Set the LEDs to the white preset. Observe on a full battery and again below ~20%.
 
@@ -132,8 +134,10 @@ sunlight trips it.
 heartbeat animation rate.
 
 **Pre-registered interpretation.** Colour corruption or dropped frames synchronised with the animation is
-supply collapse, not a firmware bug. It would justify the per-frame current budget noted as future work
-in `HeartbeatPixelThread.h`. **Do not raise `kOutputScale` to compensate** — that makes it worse.
+supply collapse, not a firmware bug. The model predicts this should **not** happen on a good battery — if
+it does, the model is wrong and should be corrected before anything else here is trusted. Seeing it only
+on a nearly flat battery confirms the model. **Do not raise `kOutputScale` to compensate** — that makes it
+worse.
 
 ---
 
