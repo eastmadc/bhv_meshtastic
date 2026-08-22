@@ -1,9 +1,32 @@
 * Mixed-signal: GPIO48 (ENABLE_VLED) -> Q1 2N7002H -> Q2 DMP2012SN -> C4 inrush
-* MOSFETs as switches with explicit datasheet gate capacitance, so every
-* parameter is visible: 2N7002H Rds~7.5R at Vgs=3.3, Ciss~50pF;
+* MOSFETs as switches with explicit datasheet gate capacitance:
+* 2N7002H Rds~7.5R at Vgs=3.3, Ciss~50pF;
 * DMP2012SN Rds~0.055R at Vgs=-4.5, Ciss~800pF, Crss~250pF.
+*
+* The boost is modelled two ways at once, and they cover disjoint regimes:
+*   - Bboost, the DCM regulator envelope, delivers up to IBOOST while out < VTARGET.
+*   - Vbat -> D15 -> L1 -> D16 -> out is the physical conduction path. It is reverse
+*     biased in regulation (out > vin) and carries nothing, but it dominates when the
+*     rail is pulled below the input, which is exactly what C4 inrush does.
+* Omitting that second path was a real error: it made recovery ~2.2x too slow.
+.param VBAT=3.7 VF15=0.30 VFD16=0.35
+.param IPK=0.400 LDCR=0.10 L1V=3.3u
 .param CLOAD=220u ESR4=0.15
-.param IBOOST=0.105 VTARGET=5.055 RQ2ON=0.055
+.param VTARGET=5.055 RQ2ON=0.055
+* IBOOST from the same DCM envelope rail.cir uses, rather than a hardcoded constant
+.param VIN={VBAT-VF15}
+.param TON={L1V*IPK/VIN}
+.param TOFF={L1V*IPK/(VTARGET+VFD16-VIN)}
+.param IBOOST={0.5*IPK*TOFF/(TON+TOFF)}
+
+Vbat vbat 0 DC {VBAT}
+D15  vbat en_in DSCH
+C1   en_in 0 4.7u
+Rc1  en_in 0 1e6
+L1   en_in lxa {L1V}
+Rl1  lxa sw {LDCR}
+D16  sw out DSCH
+.model DSCH D(is=2e-7 rs=0.55 n=1.03 cjo=12p bv=30 eg=0.69 xti=2)
 
 Bboost 0 out I = v(out) < VTARGET ? min(IBOOST, 50*(VTARGET-v(out))) : 0
 C3   out 0 4.7u
@@ -24,14 +47,15 @@ S2   out vled out q2g SWP
 Cgs2 out q2g 600p
 Cgd2 q2g vled 250p
 
-Rsr  vled c4mid {ESR4}
+Rsr  vled c4a {ESR4}
+Vc4  c4a c4mid DC 0
 C4   c4mid 0 {CLOAD}
 Iled vled 0 DC 0.014
 Rlk  vled 0 1e6
 Vsen vled vledx DC 0
 Rx   vledx 0 1e9
 
-.options reltol=2e-3 abstol=1e-10 vntol=1e-7 maxstep=100n
+.options reltol=2e-3 abstol=1e-10 vntol=1e-7
 .control
 set noaskquit
 tran 20n 60m uic
@@ -41,5 +65,10 @@ meas tran vled_pk   MAX v(vled) from=5m to=5.01m
 meas tran t_gate    WHEN v(q2g)=2.5 FALL=1
 meas tran t_vled35  WHEN v(vled)=3.5 RISE=1
 meas tran t_rec     WHEN v(out)=5.0 RISE=2
+meas tran i_inrush  MAX i(Vc4) from=5m to=5.01m
+meas tran i_100ns   FIND i(Vc4) AT=5.0001m
+meas tran i_1us     FIND i(Vc4) AT=5.001m
+meas tran i_10us    FIND i(Vc4) AT=5.01m
+meas tran t_below20 WHEN i(Vc4)=20 FALL=1
 .endc
 .end

@@ -51,33 +51,40 @@ Sweeping ADC range at fixed drive separates input-referred (analog, fixed pA) fr
 | 8192 | 31.25 | 2.28 | 71.3 |
 | 16384 | 62.5 | 1.61 | 100.8 |
 
-Neither is constant, so it is mixed. Fitting `sd² = (A/LSB)² + B²` gives **A ≈ 50 pA input-referred plus
-B ≈ 1.4 counts output-referred**, which reproduces all four measurements to within 0.5 counts.
+Neither is constant, so it is mixed. Least-squares on `sd² = (A/LSB)² + B²` gives **A ≈ 51 pA
+input-referred plus B ≈ 1.6 counts output-referred**, worst residual 0.38 counts (at the 4096 row).
+That is two parameters fitted to four points, so treat A and B as indicative rather than exact — an
+earlier revision quoted A ≈ 50 / B ≈ 1.4 and claimed 0.5-count agreement, which its own numbers missed.
 
 ## Corrected SNR, and what still holds
 
-Readout 4.01 counts and shot 1.11 counts in quadrature give **4.16 counts rms**, so against the measured
-326-count cardiac AC the real figure is **SNR 78× (38 dB)** — not the 293× predicted from shot noise
-alone. The worst session recorded, a fatigued finger at 97 counts AC, sits at **23×**.
+Readout 4.01 counts and shot 1.11 counts in quadrature give **4.16 counts rms**, against a measured
+326-count cardiac AC — a ratio of **78×**, not the 293× predicted from shot noise alone.
+
+One caveat on that number, since it is easy to misread: 326 counts is a peak-to-peak span while 4.16 is
+rms, so 78× is not a like-for-like SNR. Treating the pulse as a sinusoid gives 115 counts rms and a true
+**SNR of 28× (29 dB)**. Both are quoted here because the distinction is a factor of 2√2. The worst session
+recorded, a fatigued finger at 97 counts AC, sits at **23×** peak-to-peak-over-rms, i.e. ~8× rms.
 
 **The contact-limited conclusion survives.** 78× is still a large margin, and every signal-quality problem
 measured in this project remains mechanical rather than optical or electronic. But the margin is 3.7×
 smaller than claimed and the limiting mechanism is different, so the claim is restated rather than
 repeated.
 
-## This makes the shipped configuration provably optimal
+## The shipped configuration is the best of the three available
 
 Since `SNR = Iph / sqrt(A² + B²·LSB²)`, a **finer** range gives better SNR — the opposite of the intuition
 that a coarser range "buys headroom for free":
 
 | range | effective noise | relative SNR | occupancy with a finger |
 |---|---|---|---|
-| 2048 nA | 51.4 pA | 1.07× | **clips** (390,886 > 262,143) |
-| **4096 nA** | 54.8 pA | **1.00×** | 75% FS |
-| 8192 nA | 66.6 pA | 0.82× | 37% FS |
+| 2048 nA | 52.6 pA | 1.08× | **clips** (390,886 > 262,143) |
+| **4096 nA** | 56.7 pA | **1.00×** | 75% FS |
+| 8192 nA | 70.7 pA | 0.80× | 37% FS |
 
-8192 nA costs **18% of SNR** on top of pushing a fatigued finger below the vendor kernel's hard 30-count
-peak floor. 2048 nA would be 7% better and clips outright. **4096 nA is the best available choice.**
+8192 nA costs **20% of SNR** on top of pushing a fatigued finger below the vendor kernel's hard 30-count
+peak floor. 2048 nA would be 8% better and clips outright. **4096 nA is the best available choice.**
+These margins ride on the A/B fit above, so the ranking is solid but the percentages are approximate.
 
 And because the noise floor is flat rather than shot-limited, raising LED current *would* improve SNR
 roughly linearly — except that at 0x2F the on-finger DC is already 74.5% of full scale, so any meaningful

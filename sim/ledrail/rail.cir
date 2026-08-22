@@ -33,7 +33,7 @@ meas tran t35   WHEN v(vled)=3.5 RISE=1
 meas tran t50   WHEN v(vled)=5.0 RISE=1
 meas tran vsag  MIN v(vled) from=40.1m to=120m
 meas tran vfin  AVG v(vled) from=100m to=120m
-let imax = IOUTMAX
-print imax
+* (IOUTMAX is a .param, not a vector, so it cannot be printed from .control here;
+*  sweep2.py computes the same closed form in Python.)
 .endc
 .end

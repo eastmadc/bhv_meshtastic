@@ -1,0 +1,63 @@
+* BHV +5V rail - CYCLE-ACCURATE TPS61040 DCM PFM, WITH the datasheet min off-time
+* Latch: set when FB<Vref (demand), reset when inductor current hits Ipk.
+* Memory is broken out of the algebraic loop with a 1ns RC, which is what the
+* first attempt lacked - a bare comparator chatters and collapses the timestep.
+.param VBAT=3.7 VF15=0.30
+.param IPK=0.400 VREF=1.233
+.param CLOAD=220u ESR4=0.15
+.param RQ2=0.10 ILEDPK=0.055 LDCR=0.10
+
+Vbat vbat 0 DC {VBAT}
+D15  vbat en_in DSCH
+C1   en_in 0 4.7u
+Rc1  en_in 0 1e6
+
+L1   en_in lxa {3.3u}
+Rl1  lxa lxb {LDCR}
+Vil  lxb sw DC 0
+
+* --- peak-current PFM latch ---
+* Minimum off-time, SLVS413L 6.4.1: 400 ns. tc ramps at 1 V/us while the switch is
+* open (sw pulled up by D16) and is held down while it conducts, so v(tc) is time
+* since turn-off. The latch may only re-set once that exceeds 0.4 V = 400 ns.
+* Without this the deck is a zero-hysteresis current regulator, not a PFM converter.
+Btc  0 tc I = (v(sw) > 1.0) ? 1u : -v(tc)*1e-3
+Ctc  tc 0 1p
+Rtc  tc 0 1e9
+Bq   qraw 0 V = (i(Vil) > IPK) ? 0 : ( (v(tc) > 0.4) ? ((v(fb) < VREF) ? 1 : v(q)) : v(q) )
+Rq   qraw q 1
+Cq   q 0 1n
+Ssw  sw 0 q 0 SWMOD
+.model SWMOD SW(vt=0.5 vh=0.2 ron=0.35 roff=1e8)
+
+D16  sw out DSCH
+.model DSCH D(is=2e-7 rs=0.55 n=1.03 cjo=12p bv=30 eg=0.69 xti=2)
+
+C3   out 0 4.7u
+Rc3  out 0 1e6
+R1   out fb 620k
+C2   out fb 3.3p
+R2   fb 0 200k
+
+* Q2 on-resistance into the switched rail, with C4 and its ESR
+Rq2  out vled {RQ2}
+Rsr  vled c4mid {ESR4}
+C4   c4mid 0 {CLOAD}
+Rleak vled 0 1e6
+
+* WS2812B load: quiescent, then the animation pulse train at 40 Hz
+Iled vled 0 PULSE(0.014 {ILEDPK} 8m 50u 50u 6m 12m)
+
+.ic v(out)=5.055 v(vled)=5.050 v(c4mid)=5.050
+.options reltol=2e-3 abstol=1e-9 vntol=1e-6 method=gear maxstep=200n
+.control
+set noaskquit
+tran 100n 25m uic
+meas tran vout_avg  AVG v(out)  from=15m to=24m
+meas tran vout_pp   PP  v(out)  from=15m to=24m
+meas tran vled_min  MIN v(vled) from=9m to=25m
+meas tran vled_avg  AVG v(vled) from=15m to=24m
+meas tran il_peak   MAX i(Vil)  from=15m to=24m
+meas tran nsw       AVG v(q)    from=15m to=24m
+.endc
+.end
