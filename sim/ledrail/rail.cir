@@ -1,0 +1,39 @@
+* BHV badge +5VL rail - averaged model of TPS61040 DCM peak-current boost
+* Topology from bhvBadge2026.kicad_pcb: Vext-D15->/EN, L1->/SW, D16->+5V, C3 out,
+* R1/R2 divider, Q2 high-side to +5VL, C4 bulk on the SWITCHED side.
+*
+* The converter is represented by its ENVELOPE: it sources up to Iout_max and
+* regulates to Vtarget. Iout_max is derived from DCM peak-current operation
+* rather than assumed, so Monte Carlo over L1 / Ipk / battery propagates properly.
+.param VBAT=3.7 VF15=0.30 VFD16=0.35
+.param IPK=0.400 L1=3.3u
+.param VTARGET=5.055
+.param CLOAD=220u RQ2=0.10
+.param VIN={VBAT-VF15}
+.param TON={L1*IPK/VIN}
+.param TOFF={L1*IPK/(VTARGET+VFD16-VIN)}
+.param IOUTMAX={0.5*IPK*TOFF/(TON+TOFF)}
+
+* regulator envelope: P-control into the output node, hard-limited at IOUTMAX
+Bboost 0 out I = v(out) < VTARGET ? min(IOUTMAX, 50*(VTARGET-v(out))) : 0
+C3     out 0 4.7u
+Rbleed out 0 1meg
+
+* Q2 high-side switch, closed from t=0 (rail enable), C4 on the switched side
+Rq2    out vled {RQ2}
+C4     vled 0 {CLOAD}
+* WS2812B load: 14 devices quiescent (~1mA each), animation step at 40ms
+Iled   vled 0 PWL(0 0.014 40m 0.014 40.001m {ILEDPK})
+.param ILEDPK=0.055
+
+.control
+set noaskquit
+tran 20u 120m uic
+meas tran t35   WHEN v(vled)=3.5 RISE=1
+meas tran t50   WHEN v(vled)=5.0 RISE=1
+meas tran vsag  MIN v(vled) from=40.1m to=120m
+meas tran vfin  AVG v(vled) from=100m to=120m
+let imax = IOUTMAX
+print imax
+.endc
+.end

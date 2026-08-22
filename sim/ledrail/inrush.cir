@@ -1,0 +1,45 @@
+* Mixed-signal: GPIO48 (ENABLE_VLED) -> Q1 2N7002H -> Q2 DMP2012SN -> C4 inrush
+* MOSFETs as switches with explicit datasheet gate capacitance, so every
+* parameter is visible: 2N7002H Rds~7.5R at Vgs=3.3, Ciss~50pF;
+* DMP2012SN Rds~0.055R at Vgs=-4.5, Ciss~800pF, Crss~250pF.
+.param CLOAD=220u ESR4=0.15
+.param IBOOST=0.105 VTARGET=5.055 RQ2ON=0.055
+
+Bboost 0 out I = v(out) < VTARGET ? min(IBOOST, 50*(VTARGET-v(out))) : 0
+C3   out 0 4.7u
+Rc3  out 0 1e6
+
+Ven  en 0 PULSE(0 3.3 5m 5n 5n 50m 100m)
+R5   en 0 10k
+
+* Q1: N-ch pulls Q2 gate to ground
+S1   q2g 0 en 0 SWN
+.model SWN SW(vt=1.6 vh=0.2 ron=7.5 roff=1e9)
+R4   out q2g 10k
+Cgs1 en 0 50p
+
+* Q2: P-ch high side. Conducts when Vsg = v(out)-v(q2g) exceeds |Vth|.
+S2   out vled out q2g SWP
+.model SWP SW(vt=0.85 vh=0.15 ron={RQ2ON} roff=1e9)
+Cgs2 out q2g 600p
+Cgd2 q2g vled 250p
+
+Rsr  vled c4mid {ESR4}
+C4   c4mid 0 {CLOAD}
+Iled vled 0 DC 0.014
+Rlk  vled 0 1e6
+Vsen vled vledx DC 0
+Rx   vledx 0 1e9
+
+.options reltol=2e-3 abstol=1e-10 vntol=1e-7 maxstep=100n
+.control
+set noaskquit
+tran 20n 60m uic
+meas tran vout_pre  AVG v(out) from=4m to=4.9m
+meas tran vout_dip  MIN v(out) from=5m to=7m
+meas tran vled_pk   MAX v(vled) from=5m to=5.01m
+meas tran t_gate    WHEN v(q2g)=2.5 FALL=1
+meas tran t_vled35  WHEN v(vled)=3.5 RISE=1
+meas tran t_rec     WHEN v(out)=5.0 RISE=2
+.endc
+.end
